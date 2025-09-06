@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "miningbay.miningbay.dev"
+    namespace = "yq.bxgame.com"
     compileSdk = 33
 
     defaultConfig {
-        applicationId = "miningbay.miningbay.dev"
+        applicationId = "yq.bxgame.com"
         minSdk = 24
         targetSdk = 33
         versionCode = 1

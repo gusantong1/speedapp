@@ -21,13 +21,14 @@ import android.webkit.WebSettings
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.tencent.smtt.export.external.interfaces.WebResourceRequest
+import com.tencent.smtt.sdk.QbSdk
 import com.tencent.smtt.sdk.ValueCallback
 import com.tencent.smtt.sdk.WebChromeClient
 import com.tencent.smtt.sdk.WebView
 import com.tencent.smtt.sdk.WebViewClient
 import kotlinx.coroutines.launch
 import org.json.JSONObject
-import yq.bxgame.dev.R
+import yq.bxgame.com.R
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -35,7 +36,9 @@ import kotlin.concurrent.thread
 
 
 class X5WebActivity : AppCompatActivity() {
-    private lateinit var x5WebView: WebView
+    private var x5WebView: WebView? = null
+    private var sysWebView: android.webkit.WebView? = null
+    private var useSystemWebView: Boolean = false
 
     
 
@@ -47,10 +50,28 @@ class X5WebActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setDarkStatusBar()
-        setContentView(R.layout.activity_x5_web)
 
-        x5WebView = findViewById(R.id.x5_webview)
-        initWebView()
+        // 决定是否使用 X5
+        val canUseX5 = try { QbSdk.isTbsCoreInited() } catch (e: Throwable) { false }
+
+        if (canUseX5) {
+            try {
+                setContentView(R.layout.activity_x5_web)
+                x5WebView = findViewById(R.id.x5_webview)
+                if (x5WebView == null) {
+                    Log.e("X5", "x5_webview not found, fallback to system WebView")
+                    fallbackToSystemWebView()
+                } else {
+                    initX5WebView()
+                }
+            } catch (e: Throwable) {
+                Log.e("X5", "inflate X5 WebView failed, fallback to system WebView", e)
+                fallbackToSystemWebView()
+            }
+        } else {
+            Log.w("X5", "X5 core not inited, fallback to system WebView")
+            fallbackToSystemWebView()
+        }
 
         val params = mapOf(
             "pf" to getString(R.string.app_agent),
@@ -59,25 +80,38 @@ class X5WebActivity : AppCompatActivity() {
 
         checkPermissions()
         lifecycleScope.launch {
-
             try {
-                val result =  postFormData(
+                postFormData(
                     urlString = isMasterControl(getString(R.string.app_agent)),
                     params = params,
                     callback = {
-                        val jsonObject = JSONObject(it)
-                        val urlString = jsonObject.getString("data")
-                        // 将 urlString 缓存到 SharedPreferences
-                        val sharedPref = getSharedPreferences("app_cache", MODE_PRIVATE)
-                        sharedPref.edit().putString("cached_url", urlString).apply()
+                        try {
+                            if (it != null && it.trim().startsWith("{")) {
+                                val jsonObject = JSONObject(it)
+                                val urlString = jsonObject.optString("data", null)
+                                if (!urlString.isNullOrBlank()) {
+                                    val sharedPref = getSharedPreferences("app_cache", MODE_PRIVATE)
+                                    sharedPref.edit().putString("cached_url", urlString).apply()
+                                }
+                            } else {
+                                Log.w("X5", "Response is not JSON, skip caching: ${'$'}it")
+                            }
+                        } catch (e: Exception) {
+                            Log.e("X5", "Failed to parse JSON response", e)
+                        }
                     }
                 )
-            } catch (e: Exception) {
-            }
+            } catch (_: Exception) { }
         }
+
         val sharedPref = getSharedPreferences("app_cache", MODE_PRIVATE)
         val cachedUrl = sharedPref.getString("cached_url", getString(R.string.app_webview_url))
-        x5WebView.loadUrl(cachedUrl)
+        val finalUrl = cachedUrl ?: getString(R.string.app_webview_url)
+        if (useSystemWebView) {
+            sysWebView?.loadUrl(finalUrl)
+        } else {
+            x5WebView?.loadUrl(finalUrl)
+        }
     }
 
 
@@ -172,8 +206,8 @@ class X5WebActivity : AppCompatActivity() {
         }
     }
 
-    private fun initWebView() {
-        val webSettings = x5WebView.settings
+    private fun initX5WebView() {
+        val webSettings = x5WebView!!.settings
 
         // 基础设置
         webSettings.javaScriptEnabled = true
@@ -218,7 +252,7 @@ class X5WebActivity : AppCompatActivity() {
         webSettings.loadWithOverviewMode = true
 
         // 设置 WebViewClient 和 WebChromeClient
-        x5WebView.webViewClient = object : WebViewClient() {
+        x5WebView!!.webViewClient = object : WebViewClient() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
@@ -236,9 +270,9 @@ class X5WebActivity : AppCompatActivity() {
                 Log.d("jsCode",jsCode)
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                    x5WebView.evaluateJavascript(jsCode, null)
+                    x5WebView?.evaluateJavascript(jsCode, null)
                 } else {
-                    x5WebView.loadUrl("javascript:$jsCode")
+                    x5WebView?.loadUrl("javascript:$jsCode")
                 }
             }
 
@@ -260,11 +294,54 @@ class X5WebActivity : AppCompatActivity() {
             }
         }
 
-        x5WebView.webChromeClient =X5WebChromeClient(this)
+        x5WebView!!.webChromeClient = X5WebChromeClient(this)
 
 
-        x5WebView.addJavascriptInterface(WebAppInterface(this@X5WebActivity), "Android")
+        x5WebView!!.addJavascriptInterface(WebAppInterface(this@X5WebActivity), "Android")
 
+            val ua = webSettings.userAgentString
+            webSettings.userAgentString = "$ua myapp"
+    }
+
+    private fun fallbackToSystemWebView() {
+        useSystemWebView = true
+        setContentView(R.layout.activity_x5_web_sys)
+        sysWebView = findViewById(R.id.sys_webview)
+
+        val settings = sysWebView!!.settings
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.databaseEnabled = true
+        settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        }
+        settings.allowFileAccess = true
+        settings.allowContentAccess = true
+        settings.setSupportZoom(true)
+        settings.builtInZoomControls = true
+        settings.displayZoomControls = false
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+
+        sysWebView!!.webViewClient = object : android.webkit.WebViewClient() {
+            override fun onPageFinished(view: android.webkit.WebView, url: String) {
+                super.onPageFinished(view, url)
+                val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+                val jsCode = """
+            window.deviceId = '$deviceId';
+            console.log('Device ID injected:', window.deviceId);
+        """.trimIndent()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                    sysWebView?.evaluateJavascript(jsCode, null)
+                } else {
+                    sysWebView?.loadUrl("javascript:$jsCode")
+                }
+            }
+        }
+        sysWebView!!.webChromeClient = android.webkit.WebChromeClient()
+        sysWebView!!.addJavascriptInterface(WebAppInterface(this@X5WebActivity), "Android")
+        settings.userAgentString = settings.userAgentString + " myapp"
     }
 
     object FileChooserHelper {
@@ -414,18 +491,32 @@ class X5WebActivity : AppCompatActivity() {
     // 在Activity中添加
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        x5WebView.saveState(outState)
+        if (useSystemWebView) {
+            sysWebView?.saveState(outState)
+        } else {
+            x5WebView?.saveState(outState)
+        }
     }
 
     override fun onRestoreInstanceState(savedInstanceState: Bundle) {
         super.onRestoreInstanceState(savedInstanceState)
-        x5WebView.restoreState(savedInstanceState)
+        if (useSystemWebView) {
+            sysWebView?.restoreState(savedInstanceState)
+        } else {
+            x5WebView?.restoreState(savedInstanceState)
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && x5WebView.canGoBack()) {
-            x5WebView.goBack()
-            return true
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (useSystemWebView && sysWebView?.canGoBack() == true) {
+                sysWebView?.goBack()
+                return true
+            }
+            if (!useSystemWebView && x5WebView?.canGoBack() == true) {
+                x5WebView?.goBack()
+                return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }

@@ -9,7 +9,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import yq.bxgame.com.X5WebActivity
-import yq.bxgame.dev.R
+import yq.bxgame.com.R
 
 
 class MainActivity : AppCompatActivity() {
@@ -17,7 +17,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
             val intent = Intent(this, X5WebActivity::class.java)
-            intent.putExtra("url", getString(R.string.app_site))
+            intent.putExtra("url", getString(R.string.app_webview_url))
             startActivity(intent)
 
     }
