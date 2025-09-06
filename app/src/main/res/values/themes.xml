@@ -1,0 +1,16 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Base.Theme.Webview_app" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your light theme here. -->
+        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    </style>
+
+<!--    <style name="Theme.Webview_app" parent="Base.Theme.Webview_app" />-->
+
+    <style name="Theme.Webview_app" parent="Base.Theme.Webview_app">
+    <!-- Show a splash screen on the activity. Automatically removed when
+         Flutter draws its first frame -->
+    <item name="android:windowBackground">@drawable/launch_background</item>
+    <item name="android:windowFullscreen">false</item>
+    </style>
+</resources>

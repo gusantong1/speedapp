@@ -1,0 +1,24 @@
+{
+  "name": "buildapk",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "git@github.com:vniqd/buildApk.git",
+  "author": "Tito <milohuang306@gmail.com>",
+  "license": "MIT",
+  "scripts": {
+    "copy": "node check.js",
+    "dev": "node check.js && supervisor index.js"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1482.0",
+    "body-parser": "^1.20.2",
+    "dayjs": "^1.11.11",
+    "express": "^4.18.2",
+    "ip": "^1.1.8",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.4",
+    "shelljs": "^0.8.5",
+    "uuid": "^9.0.1",
+    "xml2js": "^0.6.2"
+  }
+}

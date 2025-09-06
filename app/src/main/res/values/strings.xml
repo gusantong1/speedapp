@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">MiningBay</string>
+    <string name="app_agent">test1</string>
+    <string name="app_webview_url">https://www.baidu.com</string>
+</resources>
