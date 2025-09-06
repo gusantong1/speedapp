@@ -14,7 +14,7 @@ function readArg(name, defVal) {
 }
 const appName = readArg('appName', null)
 const webviewUrlArg = readArg('webviewUrl', null)
-const agentCode = readArg('agentCode', 'MiningBay')+Date.now()
+const agentCode = readArg('agentCode', appName)
 
 if (!appName || !webviewUrlArg) {
   console.error('\nUsage: node index.js --appName "Your App" --webviewUrl "https://example.com" [--agentCode code]\n')
@@ -31,6 +31,9 @@ const tempDir = path.join(appProjectPath, '.cache/tmp_speed_release')
 
 shell.mkdir('-p', path.dirname(unApkDir))
 shell.mkdir('-p', agentApksDir)
+
+//删除apk
+shell.rm('-rf', path.join(agentApksDir, '*'))
 
 // ----------- Build base release APK -----------
 if (shell.exec(`cd ${appProjectPath} && ./gradlew assembleRelease`).code !== 0) {
@@ -97,7 +100,7 @@ function finalize() {
   const outBase = sanitizeFileName(agentCode || 'custom')
   const preReleaseApkPath = path.join(agentApksDir, `${outBase}-pre-release.apk`)
   const realignedApkPath = path.join(agentApksDir, `${outBase}-release.apk`)
-  const targetPath = path.join(agentApksDir, `${outBase}-signed-release.apk`)
+  const targetPath = path.join(agentApksDir, `${outBase}.apk`)
 
   if (shell.exec(`java -jar ${apktoolPath} b ${tempDir} -o ${preReleaseApkPath}`).code !== 0) {
     console.error('apktool build failed')
