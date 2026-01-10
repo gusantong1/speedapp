@@ -22,7 +22,9 @@ if (!appName || !webviewUrlArg) {
 }
 
 // ----------- Paths -----------
-const appProjectPath = '/Users/app/pro/demo/speedapp'
+// const appProjectPath = '/Users/app/pro/demo/speedapp'
+
+const appProjectPath = path.resolve(__dirname,'./app')
 const agentApksDir = path.join(appProjectPath, 'data/agent_apks')
 const apkPath = path.join(appProjectPath, 'app/build/outputs/apk/release/app-release.apk')
 const apktoolPath = path.join(appProjectPath, 'apktool.jar')
