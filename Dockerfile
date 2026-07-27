@@ -1,5 +1,5 @@
 # 在 speedapp 目录构建：
-#   docker build -t speedapp_image.
+#   docker build -t speedapp_image .
 #
 # 运行：
 #   docker run -d --name speedapp_container \
