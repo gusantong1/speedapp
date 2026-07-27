@@ -1,0 +1,11 @@
+.git
+node_modules
+.gradle
+build
+app/build
+.cache
+data
+*.apk
+*.jks
+*.keystore
+.env

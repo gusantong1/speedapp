@@ -1,0 +1,17 @@
+Host: 0.0.0.0
+Port: 10010
+# Android 工程根目录（Docker 内默认 /app）
+ProjectRoot: "/app"
+DefaultAppName: "MiningBay"
+# Gradle + 反编译可能较久
+BuildTimeoutSec: 3600
+# 非空时要求请求头 X-Pack-Token 一致
+AuthToken: "bDSYvpDxZQm6Sed9"
+
+Storage:
+  Endpoint: "http://127.0.0.1:9000"
+  AccessKey: "minioadmin"
+  SecretKey: "r4yk#6r3VTEWQ@De"
+  UseSSL: false
+  Region: "us-east-1"
+  ApkBucket: "apk-bucket-2025"
