@@ -1,12 +1,12 @@
 # 在 speedapp 目录构建：
-#   docker build -t speedapp-packager .
+#   docker build -t speedapp_image.
 #
 # 运行：
-#   docker run -d --name speedapp-packager \
+#   docker run -d --name speedapp_container \
 #     -p 10010:10010 \
 #     -v /your/host/packager.yaml:/app/etc/packager.yaml:ro \
 #     -v /your/host/henry20230831114241-keystore.jks:/app/app/henry20230831114241-keystore.jks:ro \
-#     speedapp-packager
+#     speedapp_image
 
 FROM golang:1.22-bookworm AS gobuilder
 
