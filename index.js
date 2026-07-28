@@ -38,7 +38,7 @@ shell.mkdir('-p', agentApksDir)
 shell.rm('-rf', path.join(agentApksDir, '*'))
 
 // ----------- Build base release APK -----------
-if (shell.exec(`cd ${appProjectPath} && ./gradlew assembleRelease`).code !== 0) {
+if (shell.exec(`cd ${appProjectPath} && ./gradlew :app:assembleRelease`).code !== 0) {
   console.error('Gradle build failed')
   process.exit(1)
 }
@@ -123,7 +123,7 @@ function finalize() {
     process.exit(1)
   }
 
-  const keystorePath = path.join(appProjectPath, 'app/henry20230831114241-keystore.jks')
+  const keystorePath = path.join(appProjectPath, 'secrets/henry20230831114241-keystore.jks')
   const signCmd = `${apksigner} sign --ks ${keystorePath} --ks-key-alias henry20230831114241 --ks-pass pass:123456 --key-pass pass:123456 --out ${targetPath} ${realignedApkPath}`
   if (shell.exec(signCmd).code !== 0) {
     console.error('apksigner failed')

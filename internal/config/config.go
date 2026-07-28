@@ -63,7 +63,7 @@ func Load(path string) (*Config, error) {
 		cfg.Storage.Region = "us-east-1"
 	}
 	if cfg.KeystorePath == "" {
-		cfg.KeystorePath = "app/henry20230831114241-keystore.jks"
+		cfg.KeystorePath = "secrets/henry20230831114241-keystore.jks"
 	}
 	if cfg.KeystoreAlias == "" {
 		cfg.KeystoreAlias = "henry20230831114241"

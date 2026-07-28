@@ -67,7 +67,7 @@ func (h *Handler) Packaging(c *gin.Context) {
 	if abs, ok := h.cfg.KeystoreOK(); !ok {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": "打包环境未就绪",
-			"detail":  "缺少签名 keystore: " + abs + "，请挂载到容器内该路径后重启",
+			"detail":  "缺少签名 keystore: " + abs + "，请配置 AutoGenerateKeystore 或挂载 /app/secrets",
 		})
 		return
 	}
@@ -110,7 +110,7 @@ func (h *Handler) Health(c *gin.Context) {
 	out := gin.H{"status": "ok", "keystore": abs, "keystoreReady": ok}
 	if !ok {
 		out["status"] = "degraded"
-		out["hint"] = "挂载 keystore 到 keystore 字段对应路径，例如 -v /host/xxx.jks:/app/app/henry20230831114241-keystore.jks:ro"
+		out["hint"] = "挂载 secrets 目录持久化证书，例如 -v /host/secrets:/app/secrets — 切勿挂载到 /app/app，会覆盖 Android 工程"
 	}
 	code := http.StatusOK
 	if !ok {

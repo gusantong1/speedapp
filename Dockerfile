@@ -1,13 +1,17 @@
 # 在 speedapp 目录构建：
 #   docker build -t speedapp_image .
 #
-# mkdir -p /play_package/speedapp/keystore-vol
+#   mkdir -p /play_package/speedapp/secrets
 #
-# 运行示例（AutoGenerateKeystore 时勿把误建的同名目录挂到 jks 路径）：
-#   docker run -d --name speedapp_container -p 10010:10010 \
-#     -v /play_package/speedapp/etc:/app/etc:ro \
-#     -v /play_package/speedapp/keystore-vol:/app/app \
-#     speedapp_image
+# 运行（证书挂 secrets，不要挂 /app/app）：
+# docker run -d --name speedapp_container \
+#   -p 10010:10010 \
+#   -v /play_package/speedapp/etc:/app/etc:ro \
+#   -v /play_package/speedapp/secrets:/app/secrets \
+#   speedapp_image
+
+#编译是否可用
+# curl -s http://127.0.0.1:10010/health
 
 FROM golang:1.22-bookworm AS gobuilder
 
@@ -55,7 +59,7 @@ COPY gradlew gradlew.bat gradle.properties settings.gradle.kts build.gradle.kts 
 COPY gradle ./gradle
 
 RUN chmod +x gradlew \
-    && mkdir -p data/agent_apks .cache
+    && mkdir -p data/agent_apks .cache secrets
 
 COPY --from=gobuilder /build/packager /app/packager
 COPY etc/packager.yaml /app/etc/packager.yaml

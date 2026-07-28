@@ -21,8 +21,8 @@ android {
 
     signingConfigs {
         create("release") {
-            // 签名文件路径
-            storeFile = file("henry20230831114241-keystore.jks")
+            // 签名文件放在工程根目录 secrets/，避免 Docker 挂载覆盖 app 模块
+            storeFile = rootProject.file("secrets/henry20230831114241-keystore.jks")
             // 签名密码
             storePassword = "123456"
             // 别名
