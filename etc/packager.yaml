@@ -8,6 +8,11 @@ BuildTimeoutSec: 3600
 # 非空时要求请求头 X-Pack-Token 一致
 AuthToken: "bDSYvpDxZQm6Sed9"
 KeystorePath: "app/henry20230831114241-keystore.jks"
+# 无旧 jks 时可 true；勿把宿主机上的「同名目录」挂到该路径（会阻止生成）
+AutoGenerateKeystore: true
+KeystoreAlias: "henry20230831114241"
+KeystoreStorePass: "123456"
+KeystoreKeyPass: "123456"
 
 Storage:
   Endpoint: "http://127.0.0.1:9000"

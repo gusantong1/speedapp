@@ -6,6 +6,7 @@ import (
 
 	"speedapp-packager/internal/config"
 	"speedapp-packager/internal/handler"
+	"speedapp-packager/internal/keystore"
 	"speedapp-packager/internal/packager"
 	"speedapp-packager/internal/storage"
 
@@ -21,6 +22,10 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
+	if err := keystore.Ensure(cfg); err != nil {
+		log.Fatalf("keystore: %v", err)
+	}
+
 	store, err := storage.NewClient(cfg.Storage)
 	if err != nil {
 		log.Fatalf("storage: %v", err)
@@ -31,8 +36,6 @@ func main() {
 
 	if abs, ok := cfg.KeystoreOK(); ok {
 		log.Printf("keystore ready: %s", abs)
-	} else {
-		log.Printf("WARNING: keystore missing at %s — Gradle release 会失败，请挂载 .jks 后重启容器", abs)
 	}
 
 	gin.SetMode(gin.ReleaseMode)

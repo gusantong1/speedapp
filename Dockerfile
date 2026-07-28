@@ -1,13 +1,13 @@
 # 在 speedapp 目录构建：
 #   docker build -t speedapp_image .
 #
-# 运行（keystore 必填，否则 Gradle validateSigningRelease 失败，不会上传 MinIO）：
-#   docker run -d --name speedapp_container \
-#     -p 10010:10010 \
-#     -v /play_package/speedapp/packager.yaml:/app/etc/packager.yaml:ro \
-#     -v /play_package/speedapp/henry20230831114241-keystore.jks:/app/app/henry20230831114241-keystore.jks:ro \
+# mkdir -p /play_package/speedapp/keystore-vol
+#
+# 运行示例（AutoGenerateKeystore 时勿把误建的同名目录挂到 jks 路径）：
+#   docker run -d --name speedapp_container -p 10010:10010 \
+#     -v /play_package/speedapp/etc:/app/etc:ro \
+#     -v /play_package/speedapp/keystore-vol:/app/app \
 #     speedapp_image
-# 启动后检查：curl -s http://127.0.0.1:10010/health  应 keystoreReady=true
 
 FROM golang:1.22-bookworm AS gobuilder
 

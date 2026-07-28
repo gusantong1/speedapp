@@ -16,8 +16,14 @@ type Config struct {
 	BuildTimeoutSec int    `yaml:"BuildTimeoutSec"`
 	AuthToken       string `yaml:"AuthToken"`
 	// KeystorePath 相对 ProjectRoot；Gradle release 与 index.js apksigner 均依赖此文件
-	KeystorePath string        `yaml:"KeystorePath"`
-	Storage      StorageConfig `yaml:"Storage"`
+	KeystorePath string `yaml:"KeystorePath"`
+	// AutoGenerateKeystore 为 true 且文件不存在时，启动时用 keytool 自动生成（新证书无法覆盖安装旧签名 APK）
+	AutoGenerateKeystore bool          `yaml:"AutoGenerateKeystore"`
+	KeystoreAlias        string        `yaml:"KeystoreAlias"`
+	KeystoreStorePass    string        `yaml:"KeystoreStorePass"`
+	KeystoreKeyPass      string        `yaml:"KeystoreKeyPass"`
+	KeystoreDN           string        `yaml:"KeystoreDN"`
+	Storage              StorageConfig `yaml:"Storage"`
 }
 
 type StorageConfig struct {
@@ -58,6 +64,18 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.KeystorePath == "" {
 		cfg.KeystorePath = "app/henry20230831114241-keystore.jks"
+	}
+	if cfg.KeystoreAlias == "" {
+		cfg.KeystoreAlias = "henry20230831114241"
+	}
+	if cfg.KeystoreStorePass == "" {
+		cfg.KeystoreStorePass = "123456"
+	}
+	if cfg.KeystoreKeyPass == "" {
+		cfg.KeystoreKeyPass = cfg.KeystoreStorePass
+	}
+	if cfg.KeystoreDN == "" {
+		cfg.KeystoreDN = "CN=MiningBay, OU=Mobile, O=MiningBay, L=Unknown, ST=Unknown, C=CN"
 	}
 	return &cfg, nil
 }
