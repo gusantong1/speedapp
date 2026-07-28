@@ -29,6 +29,12 @@ func main() {
 	runner := packager.NewRunner(cfg.ProjectRoot, cfg.BuildTimeoutSec)
 	h := handler.New(cfg, runner, store)
 
+	if abs, ok := cfg.KeystoreOK(); ok {
+		log.Printf("keystore ready: %s", abs)
+	} else {
+		log.Printf("WARNING: keystore missing at %s — Gradle release 会失败，请挂载 .jks 后重启容器", abs)
+	}
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery(), gin.Logger())

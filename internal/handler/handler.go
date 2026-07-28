@@ -64,6 +64,14 @@ func (h *Handler) Packaging(c *gin.Context) {
 		webviewURL = "https://" + req.Domain
 	}
 
+	if abs, ok := h.cfg.KeystoreOK(); !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "打包环境未就绪",
+			"detail":  "缺少签名 keystore: " + abs + "，请挂载到容器内该路径后重启",
+		})
+		return
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -98,7 +106,17 @@ func (h *Handler) Packaging(c *gin.Context) {
 }
 
 func (h *Handler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	abs, ok := h.cfg.KeystoreOK()
+	out := gin.H{"status": "ok", "keystore": abs, "keystoreReady": ok}
+	if !ok {
+		out["status"] = "degraded"
+		out["hint"] = "挂载 keystore 到 keystore 字段对应路径，例如 -v /host/xxx.jks:/app/app/henry20230831114241-keystore.jks:ro"
+	}
+	code := http.StatusOK
+	if !ok {
+		code = http.StatusServiceUnavailable
+	}
+	c.JSON(code, out)
 }
 
 func Register(r *gin.Engine, h *Handler) {
