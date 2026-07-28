@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -95,9 +97,10 @@ func (h *Handler) Packaging(c *gin.Context) {
 		return
 	}
 
-	uploadCtx := storage.WithUploadTime(ctx, time.Now().UnixMilli())
+	uploadCtx := storage.WithUploadTime(context.Background(), time.Now().UnixMilli())
 	fileName, fileURL, err := h.store.UploadApk(uploadCtx, appName, req.Domain, f, stat.Size(), req.Domain)
 	if err != nil {
+		log.Printf("[packager] minio upload failed: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"message": "上传失败", "detail": err.Error()})
 		return
 	}
@@ -107,13 +110,28 @@ func (h *Handler) Packaging(c *gin.Context) {
 
 func (h *Handler) Health(c *gin.Context) {
 	abs, ok := h.cfg.KeystoreOK()
-	out := gin.H{"status": "ok", "keystore": abs, "keystoreReady": ok}
+	out := gin.H{
+		"status":        "ok",
+		"keystore":      abs,
+		"keystoreReady": ok,
+		"minioEndpoint": h.cfg.Storage.Endpoint,
+	}
+	if err := h.store.Ping(c.Request.Context()); err != nil {
+		out["minioReady"] = false
+		out["minioError"] = err.Error()
+		out["status"] = "degraded"
+	} else {
+		out["minioReady"] = true
+	}
 	if !ok {
 		out["status"] = "degraded"
 		out["hint"] = "挂载 secrets 目录持久化证书，例如 -v /host/secrets:/app/secrets — 切勿挂载到 /app/app，会覆盖 Android 工程"
 	}
+	if out["minioReady"] == false {
+		out["minioHint"] = "packager 与 minio 在不同容器时，Endpoint 不能用 127.0.0.1，请用宿主机 IP:9000 或 Docker 网络内服务名 minio_container:9000"
+	}
 	code := http.StatusOK
-	if !ok {
+	if out["status"] == "degraded" {
 		code = http.StatusServiceUnavailable
 	}
 	c.JSON(code, out)

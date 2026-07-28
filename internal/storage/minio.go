@@ -37,6 +37,18 @@ func NewClient(cfg config.StorageConfig) (*Client, error) {
 	return &Client{cfg: cfg, client: client}, nil
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	bucket := c.cfg.ApkBucket
+	if bucket == "" {
+		return fmt.Errorf("ApkBucket 未配置")
+	}
+	_, err := c.client.BucketExists(ctx, bucket)
+	if err != nil {
+		return fmt.Errorf("无法连接 MinIO（请检查 Endpoint 是否在容器内可达，勿用 127.0.0.1 指宿主机）: %w", err)
+	}
+	return nil
+}
+
 // UploadApk 对齐 Nest：先按关键字删旧包，再上传；object key 含 bucket 前缀
 func (c *Client) UploadApk(ctx context.Context, appName, domain string, body io.Reader, size int64, userDomain string) (fileName, fileURL string, err error) {
 	bucket := c.cfg.ApkBucket

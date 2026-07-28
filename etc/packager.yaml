@@ -15,7 +15,7 @@ KeystoreStorePass: "123456"
 KeystoreKeyPass: "123456"
 
 Storage:
-  Endpoint: "http://127.0.0.1:9000"
+  Endpoint: "http://47.86.172.115:9000"
   AccessKey: "minioadmin"
   SecretKey: "r4yk#6r3VTEWQ@De"
   UseSSL: false
