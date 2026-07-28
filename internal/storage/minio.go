@@ -49,7 +49,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// UploadApk 对齐 Nest：先按关键字删旧包，再上传；object key 含 bucket 前缀
+// UploadApk 先按 appName-domain 关键字删旧包，再上传到 ApkBucket（key 不含 bucket 名）
 func (c *Client) UploadApk(ctx context.Context, appName, domain string, body io.Reader, size int64, userDomain string) (fileName, fileURL string, err error) {
 	bucket := c.cfg.ApkBucket
 	if bucket == "" {
@@ -59,7 +59,7 @@ func (c *Client) UploadApk(ctx context.Context, appName, domain string, body io.
 		return "", "", err
 	}
 
-	delKeyword := fmt.Sprintf("%s/%s-%s", bucket, appName, domain)
+	delKeyword := fmt.Sprintf("%s-%s", appName, domain)
 	_ = c.deleteByKeyword(ctx, bucket, delKeyword)
 
 	var millis int64
@@ -68,7 +68,7 @@ func (c *Client) UploadApk(ctx context.Context, appName, domain string, body io.
 			millis = v
 		}
 	}
-	objectName := fmt.Sprintf("%s/%s-%s-%d.apk", bucket, appName, domain, millis)
+	objectName := fmt.Sprintf("%s-%s-%d.apk", appName, domain, millis)
 
 	_, err = c.client.PutObject(ctx, bucket, objectName, body, size, minio.PutObjectOptions{
 		ContentType: "application/vnd.android.package-archive",
