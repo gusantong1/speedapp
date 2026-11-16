@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 type FileInfo struct {

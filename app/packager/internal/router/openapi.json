@@ -1,0 +1,132 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "SpeedApp 打包服务",
+    "version": "1.0.0"
+  },
+  "servers": [{"url": "/api/packager/v1"}],
+  "security": [{"PackToken": []}, {"BearerAuth": []}],
+  "paths": {
+    "/packaging/build": {
+      "post": {
+        "operationId": "buildApk",
+        "summary": "构建并返回已签名的 APK",
+        "description": "同步等待打包完成。读取 code 判断业务结果，code 为 0 时使用 data.fileUrl 下载。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {"schema": {"$ref": "#/components/schemas/BuildReq"}}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "构建成功、参数错误、鉴权失败或暂时达到构建限额。",
+            "headers": {
+              "Retry-After": {"description": "构建占用或限流时建议等待的秒数。", "schema": {"type": "integer"}}
+            },
+            "content": {
+              "application/json": {"schema": {"$ref": "#/components/schemas/BuildReply"}}
+            }
+          },
+          "500": {
+            "description": "APK 构建失败。",
+            "content": {
+              "application/json": {"schema": {"$ref": "#/components/schemas/BuildReply"}}
+            }
+          },
+          "502": {
+            "description": "MinIO 上传失败。已验证的本地 APK 可通过 data.fileUrl 下载。",
+            "content": {
+              "application/json": {"schema": {"$ref": "#/components/schemas/BuildReply"}}
+            }
+          },
+          "503": {
+            "description": "签名、Java 或 Android SDK 等打包环境未就绪。",
+            "content": {
+              "application/json": {"schema": {"$ref": "#/components/schemas/BuildReply"}}
+            }
+          }
+        }
+      }
+    },
+    "/packaging/artifacts/{name}": {
+      "get": {
+        "operationId": "downloadApk",
+        "summary": "下载打包服务保留的本地 APK",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {"type": "string", "pattern": "^[0-9a-f]{32}\\.apk$"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "APK 附件。",
+            "content": {"application/*": {"schema": {"type": "string", "format": "binary"}}}
+          },
+          "401": {"description": "打包 token 缺失或无效。"},
+          "404": {"description": "找不到对应 APK。"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "PackToken": {"type": "apiKey", "in": "header", "name": "X-Pack-Token"},
+      "BearerAuth": {"type": "http", "scheme": "bearer"}
+    },
+    "schemas": {
+      "BuildReq": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "dominList", "version", "last_version_url"],
+        "properties": {
+          "url": {"type": "string", "description": "要加载的页面地址，内置资源模式传空字符串。"},
+          "dominList": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {"type": "string"},
+            "description": "后端接口 origin 列表。"
+          },
+          "version": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+          "last_version_url": {"type": "string", "description": "资源 ZIP 地址。url 为空时必须提供。"}
+        },
+        "example": {
+          "url": "",
+          "dominList": ["https://api.example.com"],
+          "version": "1.0.1",
+          "last_version_url": "https://cdn.example.com/cocos-1.0.1.zip"
+        }
+      },
+      "BuildReply": {
+        "type": "object",
+        "required": ["code", "msg", "data", "request_id", "timestamp"],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "enum": [0, 1001, 1002, 1005, 1006, 1007],
+            "description": "0 成功，1001 参数错误，1002 鉴权失败，1005 限流或已有构建，1006 构建或上传失败，1007 环境未就绪。"
+          },
+          "msg": {"type": "string"},
+          "data": {
+            "type": "object",
+            "nullable": true,
+            "required": ["id", "fileName", "fileUrl", "mode", "version"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+              "fileName": {"type": "string"},
+              "fileUrl": {"type": "string", "description": "本地下载路径或 MinIO 对外地址。仅本地下载需要打包 token。"},
+              "mode": {"type": "string", "enum": ["url", "local"]},
+              "version": {"type": "string"},
+              "bundleSha256": {"type": "string", "description": "内置资源 ZIP 的 SHA-256。"}
+            }
+          },
+          "request_id": {"type": "string"},
+          "timestamp": {"type": "integer", "format": "int64", "description": "Unix 毫秒。"}
+        }
+      }
+    }
+  }
+}

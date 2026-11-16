@@ -1,7 +1,7 @@
 """Real local Go service / HTTP / APK verification. No external business services.
 
 Build the Go binary first. Run with --build only when JDK 17 + SDK are available.
-All generated credentials, fixture inputs and outputs stay under .cache/verification.
+Generated credentials, fixture inputs and outputs default to .cache/verification.
 """
 import argparse
 import hashlib
@@ -21,14 +21,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".cache" / "verification"
+V1_BUILD_PATH = "/api/packager/v1/packaging/build"
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--binary", default=str(OUT / "packager.exe"))
+    parser.add_argument("--binary", type=Path)
+    parser.add_argument("--output-dir", type=Path, default=OUT)
     parser.add_argument("--build", action="store_true")
     args = parser.parse_args()
-    OUT.mkdir(parents=True, exist_ok=True)
+    out = args.output_dir.resolve()
+    binary = (args.binary or out / "packager.exe").resolve()
+    out.mkdir(parents=True, exist_ok=True)
     blob = io.BytesIO()
     with zipfile.ZipFile(blob, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("index.html", '<!doctype html><html><body><div id="status">Loading</div><script src="assets/main/game.js"></script></body></html>')
@@ -36,7 +40,7 @@ def main():
         z.writestr("assets/main/settings.json", '{"version":"1.0.1","scene":"verification-fixture"}')
         z.writestr("engine/example.wasm", bytes.fromhex("0061736d01000000"))
     zip_bytes = blob.getvalue()
-    (OUT / "content-v1.zip").write_bytes(zip_bytes)
+    (out / "content-v1.zip").write_bytes(zip_bytes)
 
     class Fixture(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -73,14 +77,14 @@ def main():
             del env[name]
     config = {
         "Host": "127.0.0.1", "Port": port, "ProjectRoot": str(ROOT),
-        "DataDir": str(OUT / "service-data"), "BuildTimeoutSec": 3600,
+        "DataDir": str(out / "service-data"), "BuildTimeoutSec": 3600,
         "VersionPath": "/app/version", "DefaultAppName": "Packapp Verification",
         "Download": {"AllowedOrigins": [origin], "AllowedPrivateCIDRs": ["127.0.0.1/32"], "AllowHTTP": True},
         "Storage": {"Enabled": False}, "AutoGenerateKeystore": False,
     }
     result = {"checks": [], "apks": [], "fixture": "representative nested static files; not a full Cocos game", "androidDevice": "not exercised"}
     if args.build:
-        key_dir = OUT / "keys"
+        key_dir = out / "keys"
         key_dir.mkdir(exist_ok=True)
         password_file = key_dir / "password"
         if not password_file.exists():
@@ -91,10 +95,10 @@ def main():
         if not key.exists():
             command = ["keytool", "-genkeypair", "-storetype", "JKS", "-keystore", str(key), "-alias", "packapp-check", "-keyalg", "RSA", "-keysize", "2048", "-validity", "3650", "-dname", "CN=Local Verification", "-storepass:env", "PACK_KEYSTORE_STORE_PASS", "-keypass:env", "PACK_KEYSTORE_KEY_PASS"]
             subprocess.run(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, **hidden())
-    cfg_path = OUT / "service.yaml"
+    cfg_path = out / "service.yaml"
     cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    logs = (OUT / "service.log").open("w", encoding="utf-8")
-    process = subprocess.Popen([args.binary, "-f", str(cfg_path)], cwd=ROOT, env=env, stdout=logs, stderr=subprocess.STDOUT, **hidden())
+    logs = (out / "service.log").open("w", encoding="utf-8")
+    process = subprocess.Popen([binary, "-f", str(cfg_path)], cwd=ROOT, env=env, stdout=logs, stderr=subprocess.STDOUT, **hidden())
 
     def request(method, path, body=None, auth=True, content_type="application/json", timeout=15):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
@@ -129,7 +133,7 @@ def main():
         deadline = time.monotonic() + 15
         while True:
             if process.poll() is not None:
-                raise RuntimeError("Go service exited; see .cache/verification/service.log")
+                raise RuntimeError(f"Go service exited; see {out / 'service.log'}")
             try:
                 if request("GET", "/health", auth=False)[0] == 200:
                     break
@@ -139,6 +143,7 @@ def main():
                 raise TimeoutError("Go service did not become live")
             time.sleep(0.1)
         check("real service liveness", 200, "GET", "/health", auth=False)
+        check("admin-style liveness", 200, "GET", "/healthz", auth=False)
         valid = {"url": origin + "/index.html", "dominList": [origin], "version": "1.0.1", "last_version_url": ""}
         check("authentication required", 401, "POST", "/packaging", valid, auth=False)
         check("legacy fields rejected", 400, "POST", "/packaging", {"domain": "legacy"})
@@ -201,11 +206,19 @@ def main():
             print("PASS real HTTP build cancellation and automatic cleanup", flush=True)
             for mode in ["url", "local"]:
                 payload = dict(valid)
+                build_path = "/packaging"
                 if mode == "local":
                     payload.update(url="", last_version_url=origin + "/content.zip")
-                print("BUILD", mode, "through real POST /packaging", flush=True)
-                data = check("real " + mode + " APK build", 200, "POST", "/packaging", payload, timeout=3700, retry_cleanup=(mode == "url"))
+                    build_path = V1_BUILD_PATH
+                print("BUILD", mode, "through real POST", build_path, flush=True)
+                data = check("real " + mode + " APK build", 200, "POST", build_path, payload, timeout=3700, retry_cleanup=(mode == "url"))
                 response = json.loads(data)
+                if build_path == V1_BUILD_PATH:
+                    if response["code"] != 0 or not response["request_id"] or response["timestamp"] <= 0:
+                        raise AssertionError(f"Invalid v1 build response: {response}")
+                    response = response["data"]
+                    if not response["fileUrl"].startswith("/api/packager/v1/packaging/artifacts/"):
+                        raise AssertionError("v1 build returned a different download path")
                 artifact = Path(config["DataDir"]) / "artifacts" / response["fileName"]
                 with zipfile.ZipFile(artifact) as apk:
                     packed = json.loads(apk.read("assets/pack-config.json"))
@@ -236,7 +249,7 @@ def main():
         logs.close()
         fixture.shutdown()
         result["exitCode"] = code
-        (OUT / "service-result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        (out / "service-result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     return code
 
 

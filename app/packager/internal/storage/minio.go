@@ -9,7 +9,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 type Client struct {

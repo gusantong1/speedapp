@@ -3,9 +3,8 @@ FROM golang:1.22-bookworm AS gobuilder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
-COPY cmd ./cmd
-COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /packager ./cmd/packager
+COPY app/packager ./app/packager
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /packager ./app/packager
 
 FROM node:20-bookworm
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -29,10 +28,11 @@ RUN mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" \
     && "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 WORKDIR /app
 COPY index.js ./
-COPY app ./app
+COPY app/build.gradle.kts app/proguard-rules.pro ./app/
+COPY app/src ./app/src
 COPY gradlew gradlew.bat gradle.properties settings.gradle.kts build.gradle.kts ./
 COPY gradle ./gradle
-COPY etc/packager.yaml ./etc/packager.yaml
+COPY app/packager/etc/packager-etc.yaml ./etc/packager.yaml
 COPY --from=gobuilder /packager /app/packager
 ENV ANDROID_USER_HOME=/app/data/android-user-home
 RUN useradd --uid 10001 --create-home packapp \
@@ -43,6 +43,6 @@ RUN useradd --uid 10001 --create-home packapp \
 USER packapp
 EXPOSE 10010
 VOLUME ["/app/data", "/app/gradle-cache"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/packager", "-healthcheck"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/packager", "-f", "/app/etc/packager.yaml", "-healthcheck"]
 ENTRYPOINT ["/app/packager"]
 CMD ["-f", "/app/etc/packager.yaml"]

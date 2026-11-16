@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 func limits() config.DownloadConfig {

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 func healthcheckURL(c *config.Config) string {

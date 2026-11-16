@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 func TestMain(m *testing.M) {

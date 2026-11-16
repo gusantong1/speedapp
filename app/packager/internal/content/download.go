@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 type Downloader struct {

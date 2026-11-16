@@ -11,50 +11,53 @@ import (
 	"syscall"
 	"time"
 
-	"speedapp-packager/internal/buildprocess"
-	"speedapp-packager/internal/config"
-	"speedapp-packager/internal/handler"
-	"speedapp-packager/internal/keystore"
-	"speedapp-packager/internal/packager"
-	"speedapp-packager/internal/storage"
+	"speedapp-packager/app/packager/internal/buildprocess"
+	"speedapp-packager/app/packager/internal/config"
+	"speedapp-packager/app/packager/internal/router"
+	"speedapp-packager/app/packager/internal/svc"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
 	buildprocess.HandleInvocation()
-	configPath := flag.String("f", "etc/packager.yaml", "配置文件路径")
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	configPath := flag.String("f", "app/packager/etc/packager-etc.yaml", "配置文件路径")
 	healthcheck := flag.Bool("healthcheck", false, "check local HTTP liveness")
 	flag.Parse()
 	c, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if *healthcheck {
-		if checkHealth(c) != nil {
-			os.Exit(1)
-		}
-		return
+		return checkHealth(c)
 	}
-	if err = keystore.Ensure(c); err != nil {
-		log.Fatal(err)
-	}
-	runner, err := packager.NewRunner(c)
+	service, err := svc.NewServiceContext(c)
 	if err != nil {
-		log.Fatal(err)
-	}
-	store, err := storage.NewClient(c.Storage)
-	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	gin.SetMode(gin.ReleaseMode)
-	r := gin.New()
-	r.Use(gin.Recovery())
-	r.SetTrustedProxies(nil)
-	handler.Register(r, handler.New(c, runner, store))
-	server := &http.Server{Addr: c.ListenAddr(), Handler: r, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: time.Duration(c.BuildTimeoutSec+60) * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	engine := gin.New()
+	engine.Use(gin.Recovery())
+	engine.SetTrustedProxies(nil)
+	router.Register(engine, service)
+	server := &http.Server{
+		Addr:              c.ListenAddr(),
+		Handler:           engine,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      time.Duration(c.BuildTimeoutSec+60) * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stop)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -66,7 +69,8 @@ func main() {
 	}()
 	fmt.Printf("packapp listening on %s\n", c.ListenAddr())
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+		return err
 	}
 	<-stopped
+	return nil
 }

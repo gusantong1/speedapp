@@ -1,8 +1,8 @@
-package packager
+package packaging
 
 import (
 	"os"
-	"speedapp-packager/internal/buildprocess"
+	"speedapp-packager/app/packager/internal/buildprocess"
 	"testing"
 )
 

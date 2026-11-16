@@ -1,4 +1,4 @@
-package packager
+package packaging
 
 import (
 	"archive/zip"
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"speedapp-packager/internal/config"
+	"speedapp-packager/app/packager/internal/config"
 )
 
 func testRunner(t *testing.T, origin string) *Runner {
@@ -39,7 +39,7 @@ func TestPrepareURLAndLocalInputs(t *testing.T) {
 	r := testRunner(t, s.URL)
 	for _, mode := range []string{"url", "local"} {
 		t.Run(mode, func(t *testing.T) {
-			req := Request{DominList: []string{"backend.example.com"}, Version: "1.0.1", LastVersionURL: ""}
+			req := BuildReq{DominList: []string{"backend.example.com"}, Version: "1.0.1", LastVersionURL: ""}
 			if mode == "url" {
 				req.URL = "https://game.example.com"
 			} else {
@@ -77,7 +77,7 @@ func TestPrepareURLAndLocalInputs(t *testing.T) {
 
 func TestValidateAndProjectLock(t *testing.T) {
 	r := testRunner(t, "https://cdn.example.com")
-	for _, req := range []Request{
+	for _, req := range []BuildReq{
 		{URL: "https://site", DominList: []string{}, Version: "1"},
 		{DominList: []string{"api.example.com"}, Version: "1"},
 		{URL: "https://site", DominList: []string{"https://api.example.com/path"}, Version: "1"},
@@ -91,7 +91,7 @@ func TestValidateAndProjectLock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.cfg.DataDir, "build.lock"), []byte("other task"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Run(context.Background(), Request{}); !errors.Is(err, ErrBusy) {
+	if _, err := r.Run(context.Background(), BuildReq{}); !errors.Is(err, ErrBusy) {
 		t.Fatal("concurrent build lock ignored")
 	}
 	data, _ := os.ReadFile(filepath.Join(r.cfg.DataDir, "build.lock"))

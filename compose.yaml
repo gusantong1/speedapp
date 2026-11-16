@@ -14,7 +14,7 @@ services:
       PACK_KEYSTORE_ALIAS: ${PACK_KEYSTORE_ALIAS:-release}
     secrets: [pack_token, store_pass, key_pass]
     volumes:
-      - ./etc/packager.yaml:/app/etc/packager.yaml:ro
+      - ./app/packager/etc/packager-etc.yaml:/app/etc/packager.yaml:ro
       - ./secrets/release.jks:/app/secrets/release.jks:ro
       - pack-data:/app/data
       - gradle-cache:/app/gradle-cache

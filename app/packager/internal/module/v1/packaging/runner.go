@@ -1,4 +1,4 @@
-package packager
+package packaging
 
 import (
 	"archive/zip"
@@ -15,20 +15,13 @@ import (
 	"strings"
 	"time"
 
-	"speedapp-packager/internal/buildprocess"
-	"speedapp-packager/internal/config"
-	"speedapp-packager/internal/content"
+	"speedapp-packager/app/packager/internal/buildprocess"
+	"speedapp-packager/app/packager/internal/config"
+	"speedapp-packager/app/packager/internal/content"
 )
 
-type Request struct {
-	URL            string   `json:"url"`
-	DominList      []string `json:"dominList"`
-	Version        string   `json:"version"`
-	LastVersionURL string   `json:"last_version_url"`
-}
-
 type RuntimeConfig struct {
-	Request
+	BuildReq
 	BuildID          string                `json:"buildId"`
 	VersionEndpoints []string              `json:"versionEndpoints"`
 	Download         config.DownloadConfig `json:"download"`
@@ -42,15 +35,6 @@ type Job struct {
 	BuildDir   string `json:"buildDir"`
 	OutputPath string `json:"outputPath"`
 	AllowHTTP  bool   `json:"allowHttp"`
-}
-
-type Result struct {
-	ID       string `json:"id"`
-	FileName string `json:"fileName"`
-	FileURL  string `json:"fileUrl"`
-	Mode     string `json:"mode"`
-	Version  string `json:"version"`
-	SHA256   string `json:"bundleSha256,omitempty"`
 }
 
 type Runner struct {
@@ -77,7 +61,7 @@ func NewRunner(cfg *config.Config) (*Runner, error) {
 	return &Runner{cfg: cfg, downloader: d}, nil
 }
 
-func (r *Runner) Validate(req *Request) error {
+func (r *Runner) Validate(req *BuildReq) error {
 	if !versionPattern.MatchString(req.Version) {
 		return fmt.Errorf("invalid version")
 	}
@@ -158,7 +142,7 @@ func NewID() (string, error) {
 }
 
 // Prepare 只准备经过验证的构建输入；不会把下载失败伪装成成功 APK。
-func (r *Runner) Prepare(ctx context.Context, req Request, id string) (Job, RuntimeConfig, error) {
+func (r *Runner) Prepare(ctx context.Context, req BuildReq, id string) (Job, RuntimeConfig, error) {
 	if err := r.Validate(&req); err != nil {
 		return Job{}, RuntimeConfig{}, err
 	}
@@ -182,7 +166,7 @@ func (r *Runner) Prepare(ctx context.Context, req Request, id string) (Job, Runt
 	if err := os.Mkdir(job.AssetsDir, 0700); err != nil {
 		return job, RuntimeConfig{}, err
 	}
-	rc := RuntimeConfig{Request: req, BuildID: id, Download: r.cfg.Download}
+	rc := RuntimeConfig{BuildReq: req, BuildID: id, Download: r.cfg.Download}
 	if r.cfg.VersionURL != "" {
 		rc.VersionEndpoints = []string{r.cfg.VersionURL}
 	} else {
@@ -216,24 +200,24 @@ func (r *Runner) Prepare(ctx context.Context, req Request, id string) (Job, Runt
 	return job, rc, nil
 }
 
-func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
+func (r *Runner) Run(ctx context.Context, req BuildReq) (BuildResp, error) {
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(r.cfg.BuildTimeoutSec)*time.Second)
 	defer cancel()
 	lease, err := buildprocess.Acquire(runCtx, r.cfg.DataDir)
 	if err != nil {
-		return Result{}, err
+		return BuildResp{}, err
 	}
 	defer lease.Close()
 	if err = r.Ready(); err != nil {
-		return Result{}, err
+		return BuildResp{}, err
 	}
 	id, err := NewID()
 	if err != nil {
-		return Result{}, err
+		return BuildResp{}, err
 	}
 	job, rc, err := r.Prepare(runCtx, req, id)
 	if err != nil {
-		return Result{}, err
+		return BuildResp{}, err
 	}
 	jobPath := filepath.Join(r.cfg.DataDir, "jobs", id, "job.json")
 	command := buildprocess.Command{Args: []string{"node", filepath.Join(r.cfg.ProjectRoot, "index.js"), "--job", jobPath}, Dir: r.cfg.ProjectRoot}
@@ -254,19 +238,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (Result, error) {
 	os.WriteFile(filepath.Join(filepath.Dir(jobPath), "build.log"), []byte(safeLog), 0600)
 	// APK 必须可读且实际含本次配置和所有内置静态文件，不能只凭 Gradle exit code。
 	if err != nil {
-		return Result{}, fmt.Errorf("Android build failed; inspect jobs/%s/build.log in configured DataDir", id)
+		return BuildResp{}, fmt.Errorf("Android build failed; inspect jobs/%s/build.log in configured DataDir", id)
 	}
 	if err = VerifyAPK(job.OutputPath, job.AssetsDir); err != nil {
 		os.Remove(job.OutputPath)
-		return Result{}, err
+		return BuildResp{}, err
 	}
 	mode := "url"
 	if req.URL == "" {
 		mode = "local"
 	}
-	result := Result{ID: id, FileName: id + ".apk", FileURL: "/artifacts/" + id + ".apk", Mode: mode, Version: req.Version, SHA256: rc.BundleSHA256}
+	result := BuildResp{ID: id, FileName: id + ".apk", FileURL: LegacyArtifactPrefix + id + ".apk", Mode: mode, Version: req.Version, SHA256: rc.BundleSHA256}
 	if err = content.WriteJSON(filepath.Join(filepath.Dir(jobPath), "result.json"), result); err != nil {
-		return Result{}, err
+		return BuildResp{}, err
 	}
 	return result, nil
 }

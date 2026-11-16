@@ -2,9 +2,11 @@
 
 这是独立的 Go HTTP 服务及 Android 模板工程。只在本项目构建，不依赖 golang_game 或 cocos_game。Node 仅以参数数组调用原 Gradle Wrapper 和 apksigner，不再反编译/重打包 APK，也不需要 npm 依赖或 apktool。
 
+Go 服务位于 `app/packager`。入口为 `packager.go`，配置在 `etc/packager-etc.yaml`，路由由 `internal/router/v1` 注册。依赖在 `internal/svc` 组装，打包模块在 `internal/module/v1/packaging` 中维护 `handler.go`、`logic.go` 和 `vo.go`。
+
 ## 请求与产物
 
-`POST /packaging`，`Content-Type: application/json`，请求头 `X-Pack-Token`（或 `Authorization: Bearer ...`）必须匹配运行时密钥。JSON 必须且只能有这四个字段，保持 `dominList` 的拼写：
+dodo 调用 `POST /api/packager/v1/packaging/build`，使用 `application/json` 和 `X-Pack-Token`（或 `Authorization: Bearer ...`）。JSON 必须且只能有以下四个字段，保持 `dominList` 的拼写。
 
 ```json
 {"url":"","dominList":["https://api.example.com"],"version":"1.0.1","last_version_url":"https://cdn.example.com/cocos-1.0.1.zip"}
@@ -16,19 +18,36 @@
 - `dominList` 是后端接口 origin 列表，最多 16 个，允许裸域名（规范化为 HTTPS）或带协议/端口的 origin，不允许路径、凭据、查询参数。未配置固定 VersionURL 时至少提供一个。不是 APK 下载域名列表，也不会自动替换 Cocos 代码中写死的业务接口地址。
 - URL 模式的 `last_version_url` 可为空，四个键仍须保留。生产默认 HTTPS；仅明确的测试/内部配置可启用 HTTP。
 
-成功响应示例（文件名是随机 job ID）：
+成功时 `code` 为 `0`，从 `data.fileUrl` 取下载地址。文件名由随机作业 ID 生成。
 
 ```json
-{"id":"32位十六进制ID","fileName":"对应ID.apk","fileUrl":"/artifacts/对应ID.apk","mode":"local","version":"1.0.1","bundleSha256":"下载ZIP的SHA256"}
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "id": "0123456789abcdef0123456789abcdef",
+    "fileName": "0123456789abcdef0123456789abcdef.apk",
+    "fileUrl": "/api/packager/v1/packaging/artifacts/0123456789abcdef0123456789abcdef.apk",
+    "mode": "local",
+    "version": "1.0.1",
+    "bundleSha256": "下载 ZIP 的 SHA-256"
+  },
+  "request_id": "本次请求 ID",
+  "timestamp": 1794787200000
+}
 ```
 
-默认产物是 `<DataDir>/artifacts/<id>.apk`，`GET /artifacts/<id>.apk` 同样需要鉴权。每次构建的输入、Gradle 输出、脱敏日志和结果在 `<DataDir>/jobs/<id>/`，失败不会清空之前的 APK。服务会逐字节检查 APK 内本次配置及所有静态资源，并用 SDK apksigner 验证签名，完成后才返回成功。可选 MinIO 启用后另外上传；失败保留本地 APK，不删除旧对象。
+参数错误、鉴权失败和限流分别使用业务码 `1001`、`1002`、`1005`，HTTP 状态为 200。限流或构建忙时可按 `Retry-After` 等待后重试。打包环境未就绪时返回 503 和业务码 `1007`。OpenAPI 文档通过 `GET /api/packager/v1/doc/openapi.json` 获取。
+
+默认产物是 `<DataDir>/artifacts/<id>.apk`。下载本地 APK 时对 `data.fileUrl` 发起 GET 并带上同一个 token。启用 MinIO 时返回配置的 MinIO 对外地址。MinIO 上传失败时返回 502 和业务码 `1006`，此时可用 `data.fileUrl` 下载保留的本地 APK。每次构建的输入、Gradle 输出、脱敏日志和结果在 `<DataDir>/jobs/<id>/`。服务会逐字节检查 APK 内本次配置及所有静态资源，并用 SDK apksigner 验证签名。
+
+已有调用方可以继续使用 `POST /packaging` 和 `GET /artifacts/<id>.apk`。旧打包入口直接返回上述 `data` 的字段，使用原有 HTTP 状态码和本地下载路径。
 
 ## 启动版本查询与热更新
 
 项目原先没有可用的版本接口实现（旧代码为硬编码页面请求），现在采用以下可配置约定。**业务方需要提供该接口，本项目不会假设示例域名上已有服务器。**
 
-- `etc/packager.yaml` 的 `VersionURL` 非空：使用这个固定地址。
+- `app/packager/etc/packager-etc.yaml` 的 `VersionURL` 非空时使用这个固定地址。
 - 否则，按 `dominList` 顺序尝试 `origin + VersionPath`，默认路径 `/app/version`。
 - 每次新游戏会话启动发起 GET，追加 `current_version=当前资源版本`。普通回前台不发起新启动检查，配置重建复用原会话。检查和资源校验在后台，已有会话读取不等待下载锁。
 - 接口直接返回 JSON（无 data 外层）：
@@ -94,7 +113,7 @@ $env:PACK_KEYSTORE_PATH = "$PWD\secrets\release.jks"
 $env:PACK_KEYSTORE_ALIAS = "原证书别名"
 $env:PACK_KEYSTORE_STORE_PASS_FILE = "$PWD\secrets\store_pass"
 $env:PACK_KEYSTORE_KEY_PASS_FILE = "$PWD\secrets\key_pass"
-go run ./cmd/packager -f etc/packager.yaml
+go run ./app/packager -f app/packager/etc/packager-etc.yaml
 ```
 
 密钥支持同名环境变量或 `*_FILE`（后者优先）；密码不通过命令行传给 keytool/Gradle。可通过 `PACK_PROJECT_ROOT`、`PACK_DATA_DIR`、`PACK_HOST` 覆盖路径与监听地址。默认本机只监听 127.0.0.1:10010；配置中的目录相对 ProjectRoot。配置未提供签名/SDK 时仍可启动，构建 readiness 返回 503，不生成伪产物。自动生成证书仅在显式启用 AutoGenerateKeystore 并提供密码时进行，默认关闭。
@@ -108,11 +127,17 @@ $body = @{
   version = "1.0.1"
   last_version_url = "https://cdn.example.com/cocos-1.0.1.zip"
 } | ConvertTo-Json -Compress
-$result = Invoke-RestMethod http://127.0.0.1:10010/packaging -Method Post -Headers $headers -ContentType application/json -Body $body
-Invoke-WebRequest ("http://127.0.0.1:10010" + $result.fileUrl) -Headers $headers -OutFile $result.fileName
+$service = "http://127.0.0.1:10010"
+$result = Invoke-RestMethod "$service/api/packager/v1/packaging/build" -Method Post -Headers $headers -ContentType application/json -Body $body
+if ($result.code -ne 0) { throw $result.msg }
+if ($result.data.fileUrl.StartsWith("/")) {
+  Invoke-WebRequest ($service + $result.data.fileUrl) -Headers $headers -OutFile $result.data.fileName
+} else {
+  Invoke-WebRequest $result.data.fileUrl -OutFile $result.data.fileName
+}
 ```
 
-`GET /health` 是公开的进程存活检查；`GET /ready` 需鉴权，检查签名、Java、SDK 与已启用的 MinIO。默认请求体 16 KiB、每分钟最多 10 个有效打包请求、同项目同一时刻一个构建，忙时立即 429 并返回 Retry-After，不无限排队。构建由独立工作进程持有内核独占锁，`<DataDir>/build.lock` 是永久保留的 0 字节锁载体，文件存在不表示忙，**不要删除它**。同项目实例应使用同一 DataDir 和支持文件锁的本地文件系统。独占锁持有者用原子更新的 `build-owner.json` 记录 PID、进程出生身份、随机所有权标识及完成状态；不会按超时直接抢锁或仅凭 PID 杀进程。
+`GET /healthz` 是公开的进程存活检查。`GET /readyz` 需鉴权，检查签名、Java、SDK 与已启用的 MinIO。`/health` 和 `/ready` 也可继续调用。默认请求体 16 KiB，每分钟最多 10 个有效打包请求，同项目同一时刻一个构建。两个打包入口共享限流和构建名额。构建由独立工作进程持有内核独占锁，`<DataDir>/build.lock` 是永久保留的 0 字节锁载体，文件存在不表示忙，**不要删除它**。同项目实例应使用同一 DataDir 和支持文件锁的本地文件系统。独占锁持有者用原子更新的 `build-owner.json` 记录 PID、进程出生身份、随机所有权标识及完成状态。
 
 服务退出/请求断开使控制管道 EOF，工作进程取消 Node/Gradle 并回收所属子进程，随后释放内核锁；工作进程自身崩溃时，下一位锁持有者先验证旧进程身份和所属子进程再恢复。Windows 工作进程在启动任何子进程前加入独立 Job Object，关闭时回收其后代；Linux 使用 flock 与 pidfd 定向回收经所有权标识验证的进程，需要 Linux 5.3+ 和对同一 PID namespace 中本服务进程的 /proc 可见性。Kotlin 编译设为 in-process，不复用外部共享 Kotlin daemon。当前不是跨主机分布式构建队列；不要让不同 PID namespace 的并发实例共用未完成构建目录。Docker 重启需确保旧容器已停止，不能把本机 Windows 测试视为 Linux 容器恢复验收。
 
@@ -127,19 +152,19 @@ Invoke-WebRequest ("http://127.0.0.1:10010" + $result.fileUrl) -Headers $headers
 `Dockerfile` 构建独立 Linux amd64 镜像，内置 Go 服务、Node、JDK 17 和 Android 构建工具；签名与服务 token 从运行时只读 secret 挂载，不进入镜像。示例只发布到宿主机回环地址，未做公网部署。
 
 ```sh
-# 修改 etc/packager.yaml 的 AllowedOrigins / 版本地址，并准备上述 secrets。
+# 修改 app/packager/etc/packager-etc.yaml 的 AllowedOrigins / 版本地址，并准备上述 secrets。
 docker compose build
 docker compose up -d
-curl http://127.0.0.1:10010/health
+curl http://127.0.0.1:10010/healthz
 docker compose ps
 docker compose logs --tail=100 packapp
 ```
 
 Compose 已固定 linux/amd64；ARM 宿主机需支持该架构仿真，或调整 Go/JDK 架构配置。Compose 持久化 `/app/data` 与 `/app/gradle-cache`，配置及证书只读挂载。容器以 uid 10001 运行，宿主机 bind 目录/证书需给予该用户相应读写/读取权限。不要把宿主目录覆盖挂载到 `/app/app`，否则会遮蔽 Android 工程。
 
-镜像 HEALTHCHECK 检查进程存活；部署前另用 token 调用 `/ready` 确认打包环境。镜像构建会下载 Android SDK 并接受构建工具许可；生产构建环境需具备官方 Gradle/Maven/Google SDK 仓库的网络访问能力。TLS 前置代理和对外发布按实际部署环境另行配置。
+镜像 HEALTHCHECK 检查进程存活。部署前用 token 调用 `/readyz` 确认打包环境。镜像构建会下载 Android SDK 并接受构建工具许可。生产构建环境需具备官方 Gradle/Maven/Google SDK 仓库的网络访问能力。TLS 前置代理和对外发布按实际部署环境另行配置。
 
-手动健康检查使用 `./packager -f etc/packager.yaml -healthcheck`，需与服务使用相同的配置文件和环境变量。检查读取实际 Host/Port（含 `PACK_HOST` 覆盖），将 `0.0.0.0` / `::` 分别转换为 `127.0.0.1` / `::1`；直接请求该地址的 `/health`，不使用环境代理或跟随重定向。它不初始化签名、SDK 或存储，非 200 或连接失败退出 1，成功退出 0。
+手动健康检查使用 `./packager -f app/packager/etc/packager-etc.yaml -healthcheck`，需与服务使用相同的配置文件和环境变量。容器内的配置路径为 `/app/etc/packager.yaml`。检查读取实际 Host/Port（含 `PACK_HOST` 覆盖），将 `0.0.0.0` / `::` 分别转换为 `127.0.0.1` / `::1`，然后请求该地址的 `/health`。HTTP 200 退出 0，其他响应或连接失败退出 1。
 
 MinIO 默认关闭。启用时配置 Storage.Enabled、Endpoint、ApkBucket、PublicBaseURL，以及运行时 PACK_STORAGE_ACCESS_KEY[_FILE] / PACK_STORAGE_SECRET_KEY[_FILE]。bucket 需预先创建；PublicBaseURL 必须是正确的 HTTPS bucket 对外路由。该存储与 dominList 无关。
 
@@ -149,7 +174,7 @@ MinIO 默认关闭。启用时配置 Storage.Enabled、Endpoint、ApkBucket、Pu
 go test -count=1 -v ./...
 go vet ./...
 node --check index.js
-go build -o .cache/verification/packager.exe ./cmd/packager
+go build -o .cache/verification/packager.exe ./app/packager
 ./tools/check-updater.ps1 -JavaHome $env:JAVA_HOME
 ./tools/check-lifecycle.ps1 -JavaHome $env:JAVA_HOME
 python tools/verify_service.py --build
