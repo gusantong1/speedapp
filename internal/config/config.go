@@ -2,100 +2,199 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Host            string `yaml:"Host"`
-	Port            int    `yaml:"Port"`
-	ProjectRoot     string `yaml:"ProjectRoot"`
-	DefaultAppName  string `yaml:"DefaultAppName"`
-	BuildTimeoutSec int    `yaml:"BuildTimeoutSec"`
-	AuthToken       string `yaml:"AuthToken"`
-	// KeystorePath 相对 ProjectRoot；Gradle release 与 index.js apksigner 均依赖此文件
-	KeystorePath string `yaml:"KeystorePath"`
-	// AutoGenerateKeystore 为 true 且文件不存在时，启动时用 keytool 自动生成（新证书无法覆盖安装旧签名 APK）
-	AutoGenerateKeystore bool          `yaml:"AutoGenerateKeystore"`
-	KeystoreAlias        string        `yaml:"KeystoreAlias"`
-	KeystoreStorePass    string        `yaml:"KeystoreStorePass"`
-	KeystoreKeyPass      string        `yaml:"KeystoreKeyPass"`
-	KeystoreDN           string        `yaml:"KeystoreDN"`
-	Storage              StorageConfig `yaml:"Storage"`
+	Host                 string         `yaml:"Host"`
+	Port                 int            `yaml:"Port"`
+	ProjectRoot          string         `yaml:"ProjectRoot"`
+	DataDir              string         `yaml:"DataDir"`
+	DefaultAppName       string         `yaml:"DefaultAppName"`
+	BuildTimeoutSec      int            `yaml:"BuildTimeoutSec"`
+	MaxRequestBytes      int64          `yaml:"MaxRequestBytes"`
+	AuthToken            string         `yaml:"AuthToken"`
+	VersionURL           string         `yaml:"VersionURL"`
+	VersionPath          string         `yaml:"VersionPath"`
+	KeystorePath         string         `yaml:"KeystorePath"`
+	AutoGenerateKeystore bool           `yaml:"AutoGenerateKeystore"`
+	KeystoreAlias        string         `yaml:"KeystoreAlias"`
+	KeystoreStorePass    string         `yaml:"KeystoreStorePass"`
+	KeystoreKeyPass      string         `yaml:"KeystoreKeyPass"`
+	KeystoreDN           string         `yaml:"KeystoreDN"`
+	Download             DownloadConfig `yaml:"Download"`
+	Storage              StorageConfig  `yaml:"Storage"`
+}
+
+type DownloadConfig struct {
+	AllowedOrigins      []string `yaml:"AllowedOrigins" json:"allowedOrigins"`
+	AllowedPrivateCIDRs []string `yaml:"AllowedPrivateCIDRs" json:"allowedPrivateCidrs"`
+	AllowHTTP           bool     `yaml:"AllowHTTP" json:"allowHttp"`
+	TimeoutSec          int      `yaml:"TimeoutSec" json:"timeoutSec"`
+	MaxZipBytes         int64    `yaml:"MaxZipBytes" json:"maxZipBytes"`
+	MaxExpandedBytes    int64    `yaml:"MaxExpandedBytes" json:"maxExpandedBytes"`
+	MaxFileBytes        int64    `yaml:"MaxFileBytes" json:"maxFileBytes"`
+	MaxEntries          int      `yaml:"MaxEntries" json:"maxEntries"`
+	MaxCompressionRatio int64    `yaml:"MaxCompressionRatio" json:"maxCompressionRatio"`
 }
 
 type StorageConfig struct {
-	Endpoint  string `yaml:"Endpoint"`
-	AccessKey string `yaml:"AccessKey"`
-	SecretKey string `yaml:"SecretKey"`
-	UseSSL    bool   `yaml:"UseSSL"`
-	Region    string `yaml:"Region"`
-	ApkBucket string `yaml:"ApkBucket"`
+	Enabled       bool   `yaml:"Enabled"`
+	Endpoint      string `yaml:"Endpoint"`
+	AccessKey     string `yaml:"AccessKey"`
+	SecretKey     string `yaml:"SecretKey"`
+	UseSSL        bool   `yaml:"UseSSL"`
+	Region        string `yaml:"Region"`
+	ApkBucket     string `yaml:"ApkBucket"`
+	PublicBaseURL string `yaml:"PublicBaseURL"`
 }
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	var c Config
+	if err = yaml.Unmarshal(b, &c); err != nil {
 		return nil, err
 	}
-	if cfg.Host == "" {
-		cfg.Host = "0.0.0.0"
-	}
-	if cfg.Port == 0 {
-		cfg.Port = 10010
-	}
-	if cfg.ProjectRoot == "" {
-		cfg.ProjectRoot = "/app"
-	}
-	if cfg.DefaultAppName == "" {
-		cfg.DefaultAppName = "MiningBay"
-	}
-	if cfg.BuildTimeoutSec <= 0 {
-		cfg.BuildTimeoutSec = 3600
-	}
-	if cfg.Storage.Region == "" {
-		cfg.Storage.Region = "us-east-1"
-	}
-	if cfg.KeystorePath == "" {
-		cfg.KeystorePath = "secrets/henry20230831114241-keystore.jks"
-	}
-	if cfg.KeystoreAlias == "" {
-		cfg.KeystoreAlias = "henry20230831114241"
-	}
-	if cfg.KeystoreStorePass == "" {
-		cfg.KeystoreStorePass = "123456"
-	}
-	if cfg.KeystoreKeyPass == "" {
-		cfg.KeystoreKeyPass = cfg.KeystoreStorePass
-	}
-	if cfg.KeystoreDN == "" {
-		cfg.KeystoreDN = "CN=MiningBay, OU=Mobile, O=MiningBay, L=Unknown, ST=Unknown, C=CN"
-	}
-	return &cfg, nil
+	return complete(&c)
 }
 
-func (c *Config) ListenAddr() string {
-	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+func complete(c *Config) (*Config, error) {
+	for _, s := range []struct {
+		name   string
+		target *string
+	}{{"PACK_HOST", &c.Host}, {"PACK_PROJECT_ROOT", &c.ProjectRoot}, {"PACK_DATA_DIR", &c.DataDir}} {
+		if value, ok := os.LookupEnv(s.name); ok {
+			*s.target = value
+		}
+	}
+	// 密钥优先从环境变量/只读 secret 文件获取，禁止默认密码。
+	for _, s := range []struct {
+		name   string
+		target *string
+	}{
+		{"PACK_AUTH_TOKEN", &c.AuthToken}, {"PACK_KEYSTORE_PATH", &c.KeystorePath},
+		{"PACK_KEYSTORE_ALIAS", &c.KeystoreAlias}, {"PACK_KEYSTORE_STORE_PASS", &c.KeystoreStorePass},
+		{"PACK_KEYSTORE_KEY_PASS", &c.KeystoreKeyPass}, {"PACK_STORAGE_ACCESS_KEY", &c.Storage.AccessKey},
+		{"PACK_STORAGE_SECRET_KEY", &c.Storage.SecretKey},
+	} {
+		if value, ok := os.LookupEnv(s.name); ok {
+			*s.target = value
+		}
+		if file := os.Getenv(s.name + "_FILE"); file != "" {
+			value, err := os.ReadFile(file)
+			if err != nil {
+				return nil, fmt.Errorf("read secret %s: %w", s.name, err)
+			}
+			*s.target = strings.TrimRight(string(value), "\r\n")
+		}
+	}
+	if len(c.AuthToken) < 16 {
+		return nil, fmt.Errorf("PACK_AUTH_TOKEN must contain at least 16 bytes")
+	}
+	if c.Host == "" {
+		c.Host = "127.0.0.1"
+	}
+	if c.Port == 0 {
+		c.Port = 10010
+	}
+	if c.Port < 1 || c.Port > 65535 {
+		return nil, fmt.Errorf("invalid Port")
+	}
+	if c.ProjectRoot == "" {
+		c.ProjectRoot = "."
+	}
+	var err error
+	if c.ProjectRoot, err = filepath.Abs(c.ProjectRoot); err != nil {
+		return nil, err
+	}
+	if c.DataDir == "" {
+		c.DataDir = "data"
+	}
+	if !filepath.IsAbs(c.DataDir) {
+		c.DataDir = filepath.Join(c.ProjectRoot, c.DataDir)
+	}
+	if c.DefaultAppName == "" {
+		c.DefaultAppName = "MiningBay"
+	}
+	if len(c.DefaultAppName) > 80 || strings.ContainsAny(c.DefaultAppName, "\r\n\x00") {
+		return nil, fmt.Errorf("invalid DefaultAppName")
+	}
+	if c.BuildTimeoutSec == 0 {
+		c.BuildTimeoutSec = 3600
+	}
+	if c.BuildTimeoutSec < 1 || c.BuildTimeoutSec > 7200 {
+		return nil, fmt.Errorf("invalid BuildTimeoutSec")
+	}
+	if c.MaxRequestBytes == 0 {
+		c.MaxRequestBytes = 16384
+	}
+	if c.MaxRequestBytes < 256 || c.MaxRequestBytes > 65536 {
+		return nil, fmt.Errorf("invalid MaxRequestBytes")
+	}
+	if c.VersionPath == "" {
+		c.VersionPath = "/app/version"
+	}
+	if !strings.HasPrefix(c.VersionPath, "/") || strings.HasPrefix(c.VersionPath, "//") || strings.ContainsAny(c.VersionPath, "?#\\\r\n") {
+		return nil, fmt.Errorf("VersionPath must be an absolute URL path")
+	}
+	if c.KeystorePath == "" {
+		c.KeystorePath = "secrets/release.jks"
+	}
+	if c.KeystoreAlias == "" {
+		c.KeystoreAlias = "release"
+	}
+	if c.KeystoreKeyPass == "" {
+		c.KeystoreKeyPass = c.KeystoreStorePass
+	}
+	if c.KeystoreDN == "" {
+		c.KeystoreDN = "CN=Packapp, O=Packapp, C=CN"
+	}
+	d := &c.Download
+	if d.TimeoutSec == 0 {
+		d.TimeoutSec = 120
+	}
+	if d.MaxZipBytes == 0 {
+		d.MaxZipBytes = 128 << 20
+	}
+	if d.MaxExpandedBytes == 0 {
+		d.MaxExpandedBytes = 512 << 20
+	}
+	if d.MaxFileBytes == 0 {
+		d.MaxFileBytes = 64 << 20
+	}
+	if d.MaxEntries == 0 {
+		d.MaxEntries = 20000
+	}
+	if d.MaxCompressionRatio == 0 {
+		d.MaxCompressionRatio = 200
+	}
+	if d.TimeoutSec < 1 || d.TimeoutSec > 600 || d.MaxZipBytes < 1 || d.MaxZipBytes > 512<<20 || d.MaxExpandedBytes < 1 || d.MaxExpandedBytes > 2<<30 || d.MaxFileBytes < 1 || d.MaxFileBytes > d.MaxExpandedBytes || d.MaxEntries < 1 || d.MaxEntries > 50000 || d.MaxCompressionRatio < 1 || d.MaxCompressionRatio > 1000 {
+		return nil, fmt.Errorf("invalid Download limits")
+	}
+	if c.Storage.Region == "" {
+		c.Storage.Region = "us-east-1"
+	}
+	return c, nil
 }
 
+func (c *Config) ListenAddr() string { return net.JoinHostPort(c.Host, strconv.Itoa(c.Port)) }
 func (c *Config) KeystoreAbsPath() string {
 	if filepath.IsAbs(c.KeystorePath) {
 		return c.KeystorePath
 	}
 	return filepath.Join(c.ProjectRoot, c.KeystorePath)
 }
-
-func (c *Config) KeystoreOK() (absPath string, ok bool) {
-	absPath = c.KeystoreAbsPath()
-	st, err := os.Stat(absPath)
-	if err != nil || st.IsDir() {
-		return absPath, false
-	}
-	return absPath, true
+func (c *Config) KeystoreOK() (string, bool) {
+	p := c.KeystoreAbsPath()
+	s, err := os.Stat(p)
+	return p, err == nil && s.Mode().IsRegular()
 }

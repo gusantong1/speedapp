@@ -1,23 +1,44 @@
-Host: 0.0.0.0
+# 本项目是独立 Go + Android 打包服务，不依赖 golang_game。
+# 本机默认只监听回环地址；容器通过 PACK_HOST=0.0.0.0 覆盖。
+Host: "127.0.0.1"
 Port: 10010
-# Android 工程根目录（Docker 内默认 /app）
-ProjectRoot: "/app"
+ProjectRoot: "."
+DataDir: "data"
 DefaultAppName: "MiningBay"
-# Gradle + 反编译可能较久
 BuildTimeoutSec: 3600
-# 非空时要求请求头 X-Pack-Token 一致
-AuthToken: "bDSYvpDxZQm6Sed9"
-KeystorePath: "secrets/henry20230831114241-keystore.jks"
-# 无旧 jks 时可 true；勿把宿主机上的「同名目录」挂到该路径（会阻止生成）
-AutoGenerateKeystore: true
-KeystoreAlias: "henry20230831114241"
-KeystoreStorePass: "123456"
-KeystoreKeyPass: "123456"
+MaxRequestBytes: 16384
+
+# 必填：PACK_AUTH_TOKEN 或 PACK_AUTH_TOKEN_FILE（至少 16 字节）。
+# 密码同样支持 *_FILE，参见 README；不要在这里写生产凭据。
+AuthToken: ""
+KeystorePath: "secrets/release.jks"
+KeystoreAlias: "release"
+AutoGenerateKeystore: false
+
+# VersionURL 非空时固定使用它；否则依次请求 dominList[i] + VersionPath。
+# 版本接口由业务方提供，本服务不假设任何外部服务器已经存在。
+VersionURL: ""
+VersionPath: "/app/version"
+
+Download:
+  # 必须替换为实际 ZIP CDN 的精确 origin，含非标准端口，不支持通配符。
+  AllowedOrigins: ["https://cdn.example.com"]
+  # 仅内部部署/本地验收时配置明确 CIDR，生产通常保持为空。
+  AllowedPrivateCIDRs: []
+  AllowHTTP: false
+  TimeoutSec: 120
+  MaxZipBytes: 134217728
+  MaxExpandedBytes: 536870912
+  MaxFileBytes: 67108864
+  MaxEntries: 20000
+  MaxCompressionRatio: 200
 
 Storage:
-  Endpoint: "http://47.86.172.115:9000"
-  AccessKey: "minioadmin"
-  SecretKey: "r4yk#6r3VTEWQ@De"
-  UseSSL: false
+  # false：本机 data/artifacts；true：另上传至已存在的 MinIO bucket。
+  Enabled: false
+  Endpoint: ""
+  UseSSL: true
   Region: "us-east-1"
-  ApkBucket: "apk-bucket-2025"
+  ApkBucket: ""
+  # 例如 https://downloads.example.com/apk-bucket，必须包含实际 bucket 路由。
+  PublicBaseURL: ""

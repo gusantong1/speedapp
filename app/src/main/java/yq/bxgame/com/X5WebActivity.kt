@@ -1,7 +1,6 @@
 package yq.bxgame.com
 
 import android.Manifest
-import android.R.bool
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -19,20 +18,14 @@ import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
 import com.tencent.smtt.export.external.interfaces.WebResourceRequest
 import com.tencent.smtt.sdk.QbSdk
 import com.tencent.smtt.sdk.ValueCallback
 import com.tencent.smtt.sdk.WebChromeClient
 import com.tencent.smtt.sdk.WebView
 import com.tencent.smtt.sdk.WebViewClient
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import yq.bxgame.com.R
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
-import kotlin.concurrent.thread
 
 
 class X5WebActivity : AppCompatActivity() {
@@ -42,14 +35,22 @@ class X5WebActivity : AppCompatActivity() {
 
     
 
-    ///接口域名
-    fun isMasterControl(app_site: String): String {
-       return "https://baidu.com/"
-    }
+    private lateinit var contentManager: ContentManager
+    private lateinit var contentSession: ContentSession
+    private var pageLoaded = false
+    private var startupProgress: android.widget.ProgressBar? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setDarkStatusBar()
+        try {
+            contentManager = ContentManager.get(this)
+            contentSession = contentManager.openSession(savedInstanceState?.getString("pack_session_id"))
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(this, "应用资源初始化失败，请重新安装有效 APK", android.widget.Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
 
         // 决定是否使用 X5
         val canUseX5 = try { QbSdk.isTbsCoreInited() } catch (e: Throwable) { false }
@@ -73,47 +74,31 @@ class X5WebActivity : AppCompatActivity() {
             fallbackToSystemWebView()
         }
 
-        val params = mapOf(
-            "pf" to getString(R.string.app_agent),
-            "pt" to "2"
-        )
-
-        checkPermissions()
-        lifecycleScope.launch {
-            try {
-                postFormData(
-                    urlString = isMasterControl(getString(R.string.app_agent)),
-                    params = params,
-                    callback = {
-                        try {
-                            if (it != null && it.trim().startsWith("{")) {
-                                val jsonObject = JSONObject(it)
-                                val urlString = jsonObject.optString("data", null)
-                                if (!urlString.isNullOrBlank()) {
-                                    val sharedPref = getSharedPreferences("app_cache", MODE_PRIVATE)
-                                    sharedPref.edit().putString("cached_url", urlString).apply()
-                                }
-                            } else {
-                                Log.w("X5", "Response is not JSON, skip caching: ${'$'}it")
-                            }
-                        } catch (e: Exception) {
-                            Log.e("X5", "Failed to parse JSON response", e)
-                        }
-                    }
-                )
-            } catch (_: Exception) { }
+        startupProgress = android.widget.ProgressBar(this).also {
+            addContentView(it, android.widget.FrameLayout.LayoutParams(android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
         }
-
-        val sharedPref = getSharedPreferences("app_cache", MODE_PRIVATE)
-        val cachedUrl = sharedPref.getString("cached_url", getString(R.string.app_webview_url))
-        val finalUrl = cachedUrl ?: getString(R.string.app_webview_url)
-        if (useSystemWebView) {
-            sysWebView?.loadUrl(finalUrl)
-        } else {
-            x5WebView?.loadUrl(finalUrl)
+        checkPermissions()
+        contentManager.startSession(contentSession) {
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && !pageLoaded) {
+                    pageLoaded = true
+                    startupProgress?.visibility = View.GONE
+                    loadContent()
+                }
+            }
         }
     }
 
+    private fun loadContent() {
+        val url = contentManager.pageUrl(contentSession)
+        if (useSystemWebView) sysWebView?.loadUrl(url) else x5WebView?.loadUrl(url)
+    }
+
+    private fun injectedConfig(): String {
+        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+        return "window.deviceId = ${JSONObject.quote(deviceId)}; " +
+            "window.PackAppConfig = JSON.parse(${JSONObject.quote(contentManager.publicConfig(contentSession))});"
+    }
 
     fun Activity.setDarkStatusBar() {
         // 设置状态栏背景为黑色或深色
@@ -129,81 +114,13 @@ class X5WebActivity : AppCompatActivity() {
         }
     }
 
-    fun postFormData1(urlString: String,  callback: (Boolean) -> Unit) {
-        thread {
-            try {
-                val url = URL("https://"+urlString)
-                val connection = url.openConnection() as HttpURLConnection
-
-                // 设置请求方法和头部
-                connection.requestMethod = "GET"
-                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                connection.doOutput = true
-
-                // 获取响应
-                val responseCode = connection.responseCode
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    runOnUiThread { callback(true) }
-                } else {
-                    runOnUiThread { callback(false) }
-                }
-            } catch (e: Exception) {
-                runOnUiThread { callback(false) }
-            } finally {
-//                connection?.disconnect()
-            }
-        }
-    }
-
-
-    fun postFormData(urlString: String, params: Map<String, String>, callback: (String) -> Unit) {
-        thread {
-            try {
-                val url = URL(urlString)
-                val connection = url.openConnection() as HttpURLConnection
-
-                // 设置请求方法和头部
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                connection.doOutput = true
-
-                // 构建参数字符串
-                val postData = params.map { (key, value) ->
-                    "$key=${URLEncoder.encode(value, "UTF-8")}"
-                }.joinToString("&")
-
-                // 写入参数
-                connection.outputStream.bufferedWriter().use {
-                    it.write(postData)
-                    it.flush()
-                }
-
-                // 获取响应
-                val responseCode = connection.responseCode
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    val response = connection.inputStream.bufferedReader().use { it.readText() }
-                    runOnUiThread { callback(response) }
-                } else {
-                    runOnUiThread { callback("Error: $responseCode") }
-                }
-            } catch (e: Exception) {
-                runOnUiThread { callback("Error: ${e.message}") }
-            } finally {
-//                connection?.disconnect()
-            }
-        }
-    }
-
-    class WebAppInterface(private val context: Context) {
-        // 暴露给JS的方法名
+    class WebAppInterface(private val context: Context, private val manager: ContentManager, private val session: ContentSession) {
         @JavascriptInterface
-        fun getSpeedAppUid(): String {
-            Log.d("getSpeedAppUid",Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "")
-            return Settings.Secure.getString(
-                context.contentResolver,
-                Settings.Secure.ANDROID_ID
-            ) ?: ""
-        }
+        fun getSpeedAppUid(): String = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+
+        // Cocos 启动脚本可同步读取，避免依赖 onPageFinished 的注入时机。
+        @JavascriptInterface
+        fun getPackConfig(): String = manager.publicConfig(session)
     }
 
     private fun initX5WebView() {
@@ -228,17 +145,17 @@ class X5WebActivity : AppCompatActivity() {
 
 // 设置混合内容模式（针对HTTPS页面中的HTTP资源）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW)
+            webSettings.setMixedContentMode(if (contentManager.allowHttp) WebSettings.MIXED_CONTENT_ALWAYS_ALLOW else WebSettings.MIXED_CONTENT_NEVER_ALLOW)
         }
 
 
 
 
         // 启用必要的WebView设置
-        webSettings.setAllowFileAccess(true);
-        webSettings.setAllowContentAccess(true);
-        webSettings.setAllowFileAccessFromFileURLs(true);
-        webSettings.setAllowUniversalAccessFromFileURLs(true);
+        webSettings.setAllowFileAccess(false);
+        webSettings.setAllowContentAccess(false);
+        webSettings.setAllowFileAccessFromFileURLs(false);
+        webSettings.setAllowUniversalAccessFromFileURLs(false);
         webSettings.setDomStorageEnabled(true);
 
 
@@ -257,31 +174,17 @@ class X5WebActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
 
-                val deviceId = Settings.Secure.getString(
-                    contentResolver,
-                    Settings.Secure.ANDROID_ID
-                ) ?: ""
-
-                val jsCode = """
-            window.deviceId = '$deviceId';
-            console.log('Device ID injected:', window.deviceId);
-        """.trimIndent()
-
-                Log.d("jsCode",jsCode)
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                    x5WebView?.evaluateJavascript(jsCode, null)
-                } else {
-                    x5WebView?.loadUrl("javascript:$jsCode")
-                }
+                x5WebView?.evaluateJavascript(injectedConfig(), null)
             }
 
-            override fun shouldOverrideUrlLoading(
-                view: WebView?,
-                request: WebResourceRequest?
-            ): Boolean {
-                view?.loadUrl(request?.url.toString())
-                return true
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): com.tencent.smtt.export.external.interfaces.WebResourceResponse? {
+                val resource = contentManager.intercept(request?.url?.toString() ?: return null) ?: return null
+                return com.tencent.smtt.export.external.interfaces.WebResourceResponse(resource.mime, resource.encoding, resource.status, resource.reason, resource.headers, resource.stream)
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val scheme = request?.url?.scheme
+                return scheme != "https" && !(contentManager.allowHttp && scheme == "http")
             }
 
             override fun onReceivedError(
@@ -297,7 +200,7 @@ class X5WebActivity : AppCompatActivity() {
         x5WebView!!.webChromeClient = X5WebChromeClient(this)
 
 
-        x5WebView!!.addJavascriptInterface(WebAppInterface(this@X5WebActivity), "Android")
+        x5WebView!!.addJavascriptInterface(WebAppInterface(this@X5WebActivity, contentManager, contentSession), "Android")
 
             val ua = webSettings.userAgentString
             webSettings.userAgentString = "$ua myapp"
@@ -314,10 +217,12 @@ class X5WebActivity : AppCompatActivity() {
         settings.databaseEnabled = true
         settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            settings.mixedContentMode = if (contentManager.allowHttp) android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW else android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
-        settings.allowFileAccess = true
-        settings.allowContentAccess = true
+        settings.allowFileAccess = false
+        settings.allowContentAccess = false
+        settings.allowFileAccessFromFileURLs = false
+        settings.allowUniversalAccessFromFileURLs = false
         settings.setSupportZoom(true)
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
@@ -327,20 +232,21 @@ class X5WebActivity : AppCompatActivity() {
         sysWebView!!.webViewClient = object : android.webkit.WebViewClient() {
             override fun onPageFinished(view: android.webkit.WebView, url: String) {
                 super.onPageFinished(view, url)
-                val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
-                val jsCode = """
-            window.deviceId = '$deviceId';
-            console.log('Device ID injected:', window.deviceId);
-        """.trimIndent()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                    sysWebView?.evaluateJavascript(jsCode, null)
-                } else {
-                    sysWebView?.loadUrl("javascript:$jsCode")
-                }
+                sysWebView?.evaluateJavascript(injectedConfig(), null)
+            }
+
+            override fun shouldInterceptRequest(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): android.webkit.WebResourceResponse? {
+                val resource = contentManager.intercept(request?.url?.toString() ?: return null) ?: return null
+                return android.webkit.WebResourceResponse(resource.mime, resource.encoding, resource.status, resource.reason, resource.headers, resource.stream)
+            }
+
+            override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                val scheme = request?.url?.scheme
+                return scheme != "https" && !(contentManager.allowHttp && scheme == "http")
             }
         }
         sysWebView!!.webChromeClient = android.webkit.WebChromeClient()
-        sysWebView!!.addJavascriptInterface(WebAppInterface(this@X5WebActivity), "Android")
+        sysWebView!!.addJavascriptInterface(WebAppInterface(this@X5WebActivity, contentManager, contentSession), "Android")
         settings.userAgentString = settings.userAgentString + " myapp"
     }
 
@@ -477,6 +383,7 @@ class X5WebActivity : AppCompatActivity() {
     // 在Activity的onDestroy中
     override fun onDestroy() {
 //        FileChooserHelper.clearCallbacks()
+        if (isFinishing && ::contentSession.isInitialized) contentManager.releaseSession(contentSession)
         super.onDestroy()
     }
 
@@ -490,21 +397,8 @@ class X5WebActivity : AppCompatActivity() {
 
     // 在Activity中添加
     override fun onSaveInstanceState(outState: Bundle) {
+        if (::contentSession.isInitialized) outState.putString("pack_session_id", contentSession.id)
         super.onSaveInstanceState(outState)
-        if (useSystemWebView) {
-            sysWebView?.saveState(outState)
-        } else {
-            x5WebView?.saveState(outState)
-        }
-    }
-
-    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
-        super.onRestoreInstanceState(savedInstanceState)
-        if (useSystemWebView) {
-            sysWebView?.restoreState(savedInstanceState)
-        } else {
-            x5WebView?.restoreState(savedInstanceState)
-        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

@@ -34,6 +34,9 @@ local.properties
 captures/
 
 # Keystore files
+secrets/
+data/
+packager.exe
 *.jks
 *.keystore
 

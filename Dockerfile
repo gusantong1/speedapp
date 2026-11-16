@@ -1,71 +1,48 @@
-# 在 speedapp 目录构建：
-#   docker build -t speedapp_image .
-#
-#   mkdir -p /play_package/speedapp/secrets
-#
-# 运行（证书挂 secrets，不要挂 /app/app）：
-# docker run -d --name speedapp_container \
-#   -p 10010:10010 \
-#   -v /play_package/speedapp/etc:/app/etc:ro \
-#   -v /play_package/speedapp/secrets:/app/secrets \
-#   speedapp_image
-
-#编译是否可用
-# curl -s http://127.0.0.1:10010/health
-
+# syntax=docker/dockerfile:1
 FROM golang:1.22-bookworm AS gobuilder
-
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-RUN go build -ldflags="-s -w" -o packager ./cmd/packager/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /packager ./cmd/packager
 
 FROM node:20-bookworm
-
 ENV DEBIAN_FRONTEND=noninteractive \
     ANDROID_SDK_ROOT=/opt/android-sdk \
     ANDROID_HOME=/opt/android-sdk \
-    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    GRADLE_USER_HOME=/app/gradle-cache \
+    PACK_HOST=0.0.0.0 \
+    PACK_PROJECT_ROOT=/app \
+    TZ=Etc/UTC
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    openjdk-17-jdk-headless \
-    wget unzip ca-certificates tzdata \
+    openjdk-17-jdk-headless wget unzip ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
+# 保留项目原有 Google SDK 版本；许可证仅在构建环境中接受。
 RUN mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" \
     && wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip \
     && unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_SDK_ROOT}/cmdline-tools" \
     && mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest" \
     && rm /tmp/cmdline-tools.zip \
-    && yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses \
-    && "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
-        "platform-tools" \
-        "platforms;android-33" \
-        "build-tools;33.0.2"
-
+    && yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null \
+    && "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 WORKDIR /app
-
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-
 COPY index.js ./
-RUN wget -q https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar -O apktool.jar
-
 COPY app ./app
 COPY gradlew gradlew.bat gradle.properties settings.gradle.kts build.gradle.kts ./
 COPY gradle ./gradle
-
-RUN chmod +x gradlew \
-    && mkdir -p data/agent_apks .cache secrets
-
-COPY --from=gobuilder /build/packager /app/packager
-COPY etc/packager.yaml /app/etc/packager.yaml
-
-ENV TZ=Asia/Shanghai
+COPY etc/packager.yaml ./etc/packager.yaml
+COPY --from=gobuilder /packager /app/packager
+ENV ANDROID_USER_HOME=/app/data/android-user-home
+RUN useradd --uid 10001 --create-home packapp \
+    && sed -i 's/\r$//' gradlew \
+    && chmod +x gradlew packager \
+    && mkdir -p data gradle-cache .gradle secrets \
+    && chown -R packapp:packapp data gradle-cache .gradle secrets
+USER packapp
 EXPOSE 10010
-
+VOLUME ["/app/data", "/app/gradle-cache"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/packager", "-healthcheck"]
 ENTRYPOINT ["/app/packager"]
 CMD ["-f", "/app/etc/packager.yaml"]

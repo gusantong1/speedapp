@@ -7,10 +7,9 @@ import (
 	"net/url"
 	"strings"
 
-	"speedapp-packager/internal/config"
-
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"speedapp-packager/internal/config"
 )
 
 type Client struct {
@@ -18,135 +17,60 @@ type Client struct {
 	client *minio.Client
 }
 
-func NewClient(cfg config.StorageConfig) (*Client, error) {
-	endpoint, useSSL, err := parseEndpoint(cfg.Endpoint, cfg.UseSSL)
+// MinIO 是可选的产物存储；未启用时 APK 保存在 data/artifacts。
+func NewClient(c config.StorageConfig) (*Client, error) {
+	if !c.Enabled {
+		return nil, nil
+	}
+	endpoint, secure, err := parseEndpoint(c.Endpoint, c.UseSSL)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.AccessKey == "" || cfg.SecretKey == "" {
-		return nil, fmt.Errorf("MinIO AccessKey / SecretKey 不能为空")
+	if c.AccessKey == "" || c.SecretKey == "" || c.ApkBucket == "" {
+		return nil, fmt.Errorf("MinIO credentials and ApkBucket are required")
 	}
-	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: useSSL,
-		Region: cfg.Region,
-	})
+	public, err := url.Parse(c.PublicBaseURL)
+	if err != nil || public.Scheme != "https" || public.Host == "" || public.User != nil || public.RawQuery != "" || public.Fragment != "" {
+		return nil, fmt.Errorf("Storage.PublicBaseURL must be a configured HTTPS bucket URL")
+	}
+	client, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(c.AccessKey, c.SecretKey, ""), Secure: secure, Region: c.Region})
 	if err != nil {
 		return nil, err
 	}
-	return &Client{cfg: cfg, client: client}, nil
+	return &Client{cfg: c, client: client}, nil
 }
 
 func (c *Client) Ping(ctx context.Context) error {
-	bucket := c.cfg.ApkBucket
-	if bucket == "" {
-		return fmt.Errorf("ApkBucket 未配置")
-	}
-	_, err := c.client.BucketExists(ctx, bucket)
-	if err != nil {
-		return fmt.Errorf("无法连接 MinIO（请检查 Endpoint 是否在容器内可达，勿用 127.0.0.1 指宿主机）: %w", err)
-	}
-	return nil
-}
-
-// UploadApk 先按 appName-domain 关键字删旧包，再上传到 ApkBucket（key 不含 bucket 名）
-func (c *Client) UploadApk(ctx context.Context, appName, domain string, body io.Reader, size int64, userDomain string) (fileName, fileURL string, err error) {
-	bucket := c.cfg.ApkBucket
-	if bucket == "" {
-		return "", "", fmt.Errorf("ApkBucket 未配置")
-	}
-	if err := c.ensureBucket(ctx, bucket); err != nil {
-		return "", "", err
-	}
-
-	delKeyword := fmt.Sprintf("%s-%s", appName, domain)
-	_ = c.deleteByKeyword(ctx, bucket, delKeyword)
-
-	var millis int64
-	if ts := ctx.Value(uploadTimeKey{}); ts != nil {
-		if v, ok := ts.(int64); ok {
-			millis = v
-		}
-	}
-	objectName := fmt.Sprintf("%s-%s-%d.apk", appName, domain, millis)
-
-	_, err = c.client.PutObject(ctx, bucket, objectName, body, size, minio.PutObjectOptions{
-		ContentType: "application/vnd.android.package-archive",
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("upload apk: %w", err)
-	}
-
-	fileURL = "https://" + strings.TrimSpace(userDomain) + "/" + objectName
-	return objectName, fileURL, nil
-}
-
-type uploadTimeKey struct{}
-
-func WithUploadTime(ctx context.Context, millis int64) context.Context {
-	return context.WithValue(ctx, uploadTimeKey{}, millis)
-}
-
-func (c *Client) ensureBucket(ctx context.Context, bucket string) error {
-	exists, err := c.client.BucketExists(ctx, bucket)
+	exists, err := c.client.BucketExists(ctx, c.cfg.ApkBucket)
 	if err != nil {
 		return err
 	}
-	if exists {
-		return nil
-	}
-	return c.client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: c.cfg.Region})
-}
-
-func (c *Client) deleteByKeyword(ctx context.Context, bucket, keyword string) error {
-	var toDelete []minio.ObjectInfo
-	for obj := range c.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Recursive: true}) {
-		if obj.Err != nil {
-			return obj.Err
-		}
-		if keyword != "" && strings.Contains(obj.Key, keyword) {
-			toDelete = append(toDelete, obj)
-		}
-	}
-	if len(toDelete) == 0 {
-		return nil
-	}
-	objectsCh := make(chan minio.ObjectInfo, len(toDelete))
-	go func() {
-		defer close(objectsCh)
-		for _, o := range toDelete {
-			objectsCh <- o
-		}
-	}()
-	for err := range c.client.RemoveObjects(ctx, bucket, objectsCh, minio.RemoveObjectsOptions{}) {
-		if err.Err != nil {
-			return err.Err
-		}
+	if !exists {
+		return fmt.Errorf("configured MinIO bucket does not exist")
 	}
 	return nil
 }
 
-func parseEndpoint(raw string, useSSL bool) (endpoint string, secure bool, err error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", false, fmt.Errorf("Endpoint 不能为空")
+// 保留旧接口形状以复用存储边界；对象只用随机 job ID 命名，不删除已有产物。
+func (c *Client) UploadApk(ctx context.Context, appName, id string, body io.Reader, size int64, userDomain string) (string, string, error) {
+	name := id + ".apk"
+	_, err := c.client.PutObject(ctx, c.cfg.ApkBucket, name, body, size, minio.PutObjectOptions{ContentType: "application/vnd.android.package-archive"})
+	if err != nil {
+		return "", "", fmt.Errorf("MinIO upload failed")
 	}
-	secure = useSSL
-	if strings.Contains(raw, "://") {
-		u, parseErr := url.Parse(raw)
-		if parseErr != nil {
-			return "", false, parseErr
+	return name, strings.TrimRight(c.cfg.PublicBaseURL, "/") + "/" + name, nil
+}
+func parseEndpoint(raw string, secure bool) (string, bool, error) {
+	if !strings.Contains(raw, "://") {
+		scheme := "https://"
+		if !secure {
+			scheme = "http://"
 		}
-		if u.Host == "" {
-			return "", false, fmt.Errorf("Endpoint 缺少 host")
-		}
-		switch strings.ToLower(u.Scheme) {
-		case "https":
-			secure = true
-		case "http":
-			secure = false
-		}
-		return u.Host, secure, nil
+		raw = scheme + raw
 	}
-	return strings.TrimRight(raw, "/"), secure, nil
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", false, fmt.Errorf("invalid MinIO endpoint")
+	}
+	return u.Host, u.Scheme == "https", nil
 }

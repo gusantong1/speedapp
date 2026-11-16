@@ -5,48 +5,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
 	"speedapp-packager/internal/config"
 )
 
-// Ensure 在配置允许且文件不存在时，用 keytool 生成 keystore（别名/密码与 app/build.gradle.kts、index.js 一致）
-func Ensure(cfg *config.Config) error {
-	abs := cfg.KeystoreAbsPath()
-
-	if st, err := os.Stat(abs); err == nil {
-		if st.IsDir() {
-			return fmt.Errorf("keystore 路径是目录而非文件: %s；请在宿主机执行 rm -rf 该路径后重启，或取消错误的 -v 挂载", abs)
-		}
+// 已有签名必须复用；自动创建仅在显式启用且提供密码时执行。
+func Ensure(c *config.Config) error {
+	if _, ok := c.KeystoreOK(); ok {
 		return nil
 	}
-
-	if !cfg.AutoGenerateKeystore {
-		return fmt.Errorf("keystore 不存在: %s", abs)
+	if !c.AutoGenerateKeystore {
+		return nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return fmt.Errorf("创建 keystore 目录: %w", err)
+	if c.KeystoreStorePass == "" || c.KeystoreKeyPass == "" {
+		return fmt.Errorf("keystore generation requires signing passwords")
 	}
-
-	alias := cfg.KeystoreAlias
-	storePass := cfg.KeystoreStorePass
-	keyPass := cfg.KeystoreKeyPass
-	dname := cfg.KeystoreDN
-
-	args := []string{
-		"-genkeypair", "-v",
-		"-keystore", abs,
-		"-alias", alias,
-		"-keyalg", "RSA", "-keysize", "2048", "-validity", "36500",
-		"-storepass", storePass,
-		"-keypass", keyPass,
-		"-dname", dname,
+	if err := os.MkdirAll(filepath.Dir(c.KeystoreAbsPath()), 0700); err != nil {
+		return err
 	}
-
-	cmd := exec.Command("keytool", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("keytool 生成 keystore 失败: %w; %s", err, string(out))
+	cmd := exec.Command("keytool", "-genkeypair", "-keystore", c.KeystoreAbsPath(), "-alias", c.KeystoreAlias,
+		"-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-storepass:env", "PACK_KEYSTORE_STORE_PASS",
+		"-keypass:env", "PACK_KEYSTORE_KEY_PASS", "-dname", c.KeystoreDN)
+	cmd.Env = append(os.Environ(), "PACK_KEYSTORE_STORE_PASS="+c.KeystoreStorePass, "PACK_KEYSTORE_KEY_PASS="+c.KeystoreKeyPass)
+	// 不回传 keytool 输出，防止外部工具的诊断泄露密钥。
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("keytool keystore generation failed")
 	}
 	return nil
 }
