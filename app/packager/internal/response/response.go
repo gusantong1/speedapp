@@ -19,12 +19,13 @@ const (
 
 const requestIDHeader = "X-Request-ID"
 
+// Body 是 v1 打包接口的统一 JSON 响应。
 type Body struct {
-	Code      int    `json:"code"`
-	Msg       string `json:"msg"`
-	Data      any    `json:"data"`
-	RequestID string `json:"request_id"`
-	Timestamp int64  `json:"timestamp"`
+	Code      int    `json:"code"`       // 业务状态码，0 表示成功。
+	Msg       string `json:"msg"`        // 业务提示文案。
+	Data      any    `json:"data"`       // 业务数据，可包含 APK 产物信息，空值编码为 JSON null。
+	RequestID string `json:"request_id"` // 请求标识，与响应头 X-Request-ID 一致。
+	Timestamp int64  `json:"timestamp"`  // 服务端响应时间，Unix 毫秒时间戳。
 }
 
 func RequestID(c *gin.Context) {
