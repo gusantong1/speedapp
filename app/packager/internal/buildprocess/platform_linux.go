@@ -62,6 +62,28 @@ func sameProcess(pid int, birth string) (bool, error) {
 	return actual == birth, err
 }
 
+// A process can exit between /proc enumeration and an environ read. In
+// particular, an unreaped zombie may deny that read after losing its mm.
+// Only confirmed exit explains away the error; live or unreadable state does not.
+func processExited(pid int, readErr error) bool {
+	if os.IsNotExist(readErr) || errors.Is(readErr, unix.ESRCH) {
+		return true
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if os.IsNotExist(err) || errors.Is(err, unix.ESRCH) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	end := strings.LastIndexByte(string(data), ')')
+	if end < 0 {
+		return false
+	}
+	fields := strings.Fields(string(data[end+1:]))
+	return len(fields) > 0 && (fields[0] == "Z" || fields[0] == "X")
+}
+
 // pidfds target the verified process, even if its numeric PID is subsequently reused.
 // Linux 5.3+ is required for automatic orphan recovery; unsupported kernels fail closed.
 func reap(record owner, self bool) error {
@@ -89,10 +111,10 @@ func reap(record owner, self bool) error {
 				continue
 			}
 			env, err := os.ReadFile(filepath.Join(base, "environ"))
-			if os.IsNotExist(err) {
-				continue
-			}
 			if err != nil {
+				if processExited(pid, err) {
+					continue
+				}
 				return err
 			}
 			match := false
@@ -114,7 +136,14 @@ func reap(record owner, self bool) error {
 			}
 			// Re-read through /proc after opening the pidfd; refuse a mismatched/reused PID.
 			check, err := os.ReadFile(filepath.Join(base, "environ"))
-			if err == nil && bytes.Equal(check, env) {
+			if err != nil {
+				unix.Close(fd)
+				if processExited(pid, err) {
+					continue
+				}
+				return err
+			}
+			if bytes.Equal(check, env) {
 				remaining++
 				if err = unix.PidfdSendSignal(fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 					unix.Close(fd)
