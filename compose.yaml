@@ -8,14 +8,9 @@ services:
       - "127.0.0.1:10010:10010"
     environment:
       PACK_AUTH_TOKEN_FILE: /run/secrets/pack_token
-      PACK_KEYSTORE_STORE_PASS_FILE: /run/secrets/store_pass
-      PACK_KEYSTORE_KEY_PASS_FILE: /run/secrets/key_pass
-      # 必须与原有签名证书的别名一致；可用 .env 设置非敏感别名。
-      PACK_KEYSTORE_ALIAS: ${PACK_KEYSTORE_ALIAS:-release}
-    secrets: [pack_token, store_pass, key_pass]
+    secrets: [pack_token]
     volumes:
       - ./app/packager/etc/packager-etc.yaml:/app/etc/packager.yaml:ro
-      - ./secrets/release.jks:/app/secrets/release.jks:ro
       - pack-data:/app/data
       - gradle-cache:/app/gradle-cache
     cap_drop: [ALL]
@@ -28,10 +23,6 @@ services:
 secrets:
   pack_token:
     file: ./secrets/pack_token
-  store_pass:
-    file: ./secrets/store_pass
-  key_pass:
-    file: ./secrets/key_pass
 volumes:
   pack-data:
   gradle-cache:

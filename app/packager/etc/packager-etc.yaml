@@ -11,9 +11,6 @@ MaxRequestBytes: 16384
 # 必填：PACK_AUTH_TOKEN 或 PACK_AUTH_TOKEN_FILE（至少 16 字节）。
 # 密码同样支持 *_FILE，参见 README；不要在这里写生产凭据。
 AuthToken: ""
-KeystorePath: "secrets/release.jks"
-KeystoreAlias: "release"
-AutoGenerateKeystore: false
 
 # VersionURL 非空时固定使用它；否则依次请求 dominList[i] + VersionPath。
 # 版本接口由业务方提供，本服务不假设任何外部服务器已经存在。
@@ -21,8 +18,8 @@ VersionURL: ""
 VersionPath: "/app/version"
 
 Download:
-  # 必须替换为实际 ZIP CDN 的精确 origin，含非标准端口，不支持通配符。
-  AllowedOrigins: ["https://cdn.example.com"]
+  # ZIP 文件服的精确 origin，使用非标准端口时需写出端口。
+  AllowedOrigins: ["https://f.chongyang.bid"]
   # 仅内部部署/本地验收时配置明确 CIDR，生产通常保持为空。
   AllowedPrivateCIDRs: []
   AllowHTTP: false

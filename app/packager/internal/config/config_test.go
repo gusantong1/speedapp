@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-func TestDefaultsHaveNoSigningOrStorageCredentials(t *testing.T) {
+func TestDefaultsHaveNoStorageCredentials(t *testing.T) {
 	t.Setenv("PACK_AUTH_TOKEN", "test-token-at-least-16")
 	c, err := complete(&Config{ProjectRoot: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.KeystoreStorePass != "" || c.KeystoreKeyPass != "" || c.AutoGenerateKeystore || c.Storage.Enabled {
-		t.Fatal("unsafe secret/storage defaults")
+	if c.Storage.Enabled || c.Storage.AccessKey != "" || c.Storage.SecretKey != "" {
+		t.Fatal("unsafe storage defaults")
 	}
 	if c.Host != "127.0.0.1" || !filepath.IsAbs(c.DataDir) || c.VersionPath != "/app/version" {
 		t.Fatal("bad defaults")

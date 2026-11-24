@@ -61,6 +61,29 @@ public class StartupLifecycleTest {
         BundleUpdater.Options options=(BundleUpdater.Options)field(manager,"options");options.allowHttp=true;options.timeoutSec=15;options.allowedOrigins.add(origin);options.allowedPrivateCidrs.add("127.0.0.1/32");
     }
     @After public void stop()throws Exception{releaseVersion.countDown();server.shutdown();}
+
+    @Test public void startupDomainIsExposedBeforeTheBundledPageRuns() throws Exception {
+        JSONObject config = (JSONObject) field(manager, "config");
+        config.put("getdomin", "dapi.chongyang.bid");
+        config.put("dominList", new JSONArray().put("https://dapi.chongyang.bid").put("https://backup.example.com"));
+        X5WebActivity.WebAppInterface bridge = new X5WebActivity.WebAppInterface(
+            RuntimeEnvironment.getApplication(), manager, manager.openSession(null)
+        );
+        assertEquals("dapi.chongyang.bid", bridge.getdomin());
+
+        ContentManager.Resource page = manager.intercept(
+            ContentManager.ORIGIN + "/html/" + BundleUpdater.BUILTIN + "/index.html"
+        );
+        assertNotNull(page);
+        assertEquals(200, page.getStatus());
+        try (java.io.InputStream input = page.getStream()) {
+            String html = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(html.startsWith("<!doctype html>"));
+            int initializer = html.indexOf("window.getdomin=window.Android.getdomin();");
+            assertTrue(initializer > 0 && initializer < html.indexOf("<body>"));
+        }
+    }
+
     @Test public void foregroundAndLateRealUpdateCannotReloadAnActiveLocalGame() throws Exception {
         ActivityController<X5WebActivity> c=Robolectric.buildActivity(X5WebActivity.class).create().start().resume().visible();
         try {

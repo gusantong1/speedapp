@@ -22,6 +22,7 @@ import (
 
 type RuntimeConfig struct {
 	BuildReq
+	GetDomin         string                `json:"getdomin"` // 原样保留请求中的第一条域名，供 Cocos 启动引导。
 	BuildID          string                `json:"buildId"`
 	VersionEndpoints []string              `json:"versionEndpoints"`
 	Download         config.DownloadConfig `json:"download"`
@@ -29,12 +30,14 @@ type RuntimeConfig struct {
 }
 
 type Job struct {
-	ID         string `json:"id"`
-	AppName    string `json:"appName"`
-	AssetsDir  string `json:"assetsDir"`
-	BuildDir   string `json:"buildDir"`
-	OutputPath string `json:"outputPath"`
-	AllowHTTP  bool   `json:"allowHttp"`
+	ID           string `json:"id"`
+	AppName      string `json:"appName"`
+	PackageName  string `json:"packageName"`
+	KeystorePath string `json:"keystorePath"`
+	AssetsDir    string `json:"assetsDir"`
+	BuildDir     string `json:"buildDir"`
+	OutputPath   string `json:"outputPath"`
+	AllowHTTP    bool   `json:"allowHttp"`
 }
 
 type Runner struct {
@@ -44,6 +47,12 @@ type Runner struct {
 
 var ErrBusy = buildprocess.ErrBusy
 var versionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+var (
+	apkPackageName  = regexp.MustCompile(`(?m)^package: name='([^']+)'`)
+	apkAppIcon      = regexp.MustCompile(`(?m)^application-icon-[0-9]+:'([^'\r\n]+)'`)
+	apkLauncherIcon = regexp.MustCompile(`(?m)^launchable-activity:[^\r\n]* icon='([^'\r\n]+)'`)
+)
 
 func NewRunner(cfg *config.Config) (*Runner, error) {
 	d, err := content.NewDownloader(cfg.Download)
@@ -62,12 +71,18 @@ func NewRunner(cfg *config.Config) (*Runner, error) {
 }
 
 func (r *Runner) Validate(req *BuildReq) error {
+	request := *req
+	return r.normalizeRequest(&request)
+}
+
+func (r *Runner) normalizeRequest(req *BuildReq) error {
 	if !versionPattern.MatchString(req.Version) {
 		return fmt.Errorf("invalid version")
 	}
 	if req.DominList == nil || len(req.DominList) > 16 {
 		return fmt.Errorf("dominList must be an array with at most 16 backend origins")
 	}
+	origins := make([]string, len(req.DominList))
 	for i, raw := range req.DominList {
 		if !strings.Contains(raw, "://") {
 			raw = "https://" + raw
@@ -76,7 +91,7 @@ func (r *Runner) Validate(req *BuildReq) error {
 		if err != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
 			return fmt.Errorf("dominList must contain backend origins without paths")
 		}
-		req.DominList[i] = strings.TrimRight(raw, "/")
+		origins[i] = strings.TrimRight(raw, "/")
 	}
 	if len(req.DominList) == 0 && r.cfg.VersionURL == "" {
 		return fmt.Errorf("dominList or configured VersionURL is required for startup version checks")
@@ -96,17 +111,12 @@ func (r *Runner) Validate(req *BuildReq) error {
 	if req.URL == "" && len(r.cfg.Download.AllowedOrigins) == 0 {
 		return fmt.Errorf("Download.AllowedOrigins is required")
 	}
+	req.DominList = origins
 	return nil
 }
 
 func (r *Runner) Ready() error {
-	if _, ok := r.cfg.KeystoreOK(); !ok {
-		return fmt.Errorf("release keystore is missing")
-	}
-	if r.cfg.KeystoreStorePass == "" || r.cfg.KeystoreKeyPass == "" {
-		return fmt.Errorf("signing passwords are missing")
-	}
-	for _, name := range []string{"node", "java"} {
+	for _, name := range []string{"node", "java", "keytool"} {
 		if _, err := exec.LookPath(name); err != nil {
 			return fmt.Errorf("%s is unavailable in PATH", name)
 		}
@@ -117,20 +127,28 @@ func (r *Runner) Ready() error {
 	if err != nil || !regexp.MustCompile(`version "(17|18|19|20)\.`).Match(javaVersion) {
 		return fmt.Errorf("Java 17 is required by this Gradle 8.4/AGP build configuration")
 	}
-	sdk := os.Getenv("ANDROID_SDK_ROOT")
-	if sdk == "" {
-		sdk = os.Getenv("ANDROID_HOME")
-	}
+	sdk := androidSDK()
 	if sdk == "" {
 		return fmt.Errorf("ANDROID_SDK_ROOT is unset")
 	}
 	if _, err := os.Stat(filepath.Join(sdk, "platforms", "android-33", "android.jar")); err != nil {
 		return fmt.Errorf("Android SDK platform android-33 is unavailable")
 	}
-	if _, err := os.Stat(filepath.Join(sdk, "build-tools", "33.0.2", "lib", "apksigner.jar")); err != nil {
+	tools := filepath.Join(sdk, "build-tools", "33.0.2")
+	if _, err := os.Stat(filepath.Join(tools, "lib", "apksigner.jar")); err != nil {
 		return fmt.Errorf("Android build-tools 33.0.2 is unavailable")
 	}
+	if _, err := exec.LookPath(filepath.Join(tools, "aapt2")); err != nil {
+		return fmt.Errorf("Android build-tools 33.0.2 aapt2 is unavailable")
+	}
 	return nil
+}
+
+func androidSDK() string {
+	if sdk := os.Getenv("ANDROID_SDK_ROOT"); sdk != "" {
+		return sdk
+	}
+	return os.Getenv("ANDROID_HOME")
 }
 
 func NewID() (string, error) {
@@ -143,14 +161,27 @@ func NewID() (string, error) {
 
 // Prepare 只准备经过验证的构建输入；不会把下载失败伪装成成功 APK。
 func (r *Runner) Prepare(ctx context.Context, req BuildReq, id string) (Job, RuntimeConfig, error) {
-	if err := r.Validate(&req); err != nil {
+	var getDomin string
+	if len(req.DominList) > 0 {
+		getDomin = req.DominList[0]
+	}
+	if err := r.normalizeRequest(&req); err != nil {
 		return Job{}, RuntimeConfig{}, err
 	}
 	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
 		return Job{}, RuntimeConfig{}, fmt.Errorf("invalid job ID")
 	}
 	root := filepath.Join(r.cfg.DataDir, "jobs", id)
-	job := Job{ID: id, AppName: r.cfg.DefaultAppName, AssetsDir: filepath.Join(root, "assets"), BuildDir: filepath.Join(root, "build"), OutputPath: filepath.Join(r.cfg.DataDir, "artifacts", id+".apk"), AllowHTTP: r.cfg.Download.AllowHTTP}
+	job := Job{
+		ID:           id,
+		AppName:      r.cfg.DefaultAppName,
+		PackageName:  fmt.Sprintf("yq.bxgame.com.b%d_%s", time.Now().UnixMilli(), id),
+		KeystorePath: filepath.Join(root, "signing.p12"),
+		AssetsDir:    filepath.Join(root, "assets"),
+		BuildDir:     filepath.Join(root, "build"),
+		OutputPath:   filepath.Join(r.cfg.DataDir, "artifacts", id+".apk"),
+		AllowHTTP:    r.cfg.Download.AllowHTTP,
+	}
 	if err := os.MkdirAll(filepath.Dir(root), 0700); err != nil {
 		return job, RuntimeConfig{}, err
 	}
@@ -166,7 +197,7 @@ func (r *Runner) Prepare(ctx context.Context, req BuildReq, id string) (Job, Run
 	if err := os.Mkdir(job.AssetsDir, 0700); err != nil {
 		return job, RuntimeConfig{}, err
 	}
-	rc := RuntimeConfig{BuildReq: req, BuildID: id, Download: r.cfg.Download}
+	rc := RuntimeConfig{BuildReq: req, GetDomin: getDomin, BuildID: id, Download: r.cfg.Download}
 	if r.cfg.VersionURL != "" {
 		rc.VersionEndpoints = []string{r.cfg.VersionURL}
 	} else {
@@ -215,22 +246,27 @@ func (r *Runner) Run(ctx context.Context, req BuildReq) (BuildResp, error) {
 	if err != nil {
 		return BuildResp{}, err
 	}
+	signingPassword, err := NewID()
+	if err != nil {
+		return BuildResp{}, err
+	}
 	job, rc, err := r.Prepare(runCtx, req, id)
 	if err != nil {
 		return BuildResp{}, err
 	}
+	// Node 正常退出时清除密钥库，服务在工作进程取消后再做一次清理。
+	defer os.Remove(job.KeystorePath)
 	jobPath := filepath.Join(r.cfg.DataDir, "jobs", id, "job.json")
 	command := buildprocess.Command{Args: []string{"node", filepath.Join(r.cfg.ProjectRoot, "index.js"), "--job", jobPath}, Dir: r.cfg.ProjectRoot}
-	// 构建进程只拿签名所需值，不继承 HTTP token 或存储凭据。
+	// 构建进程只接收本次签名密码，不继承 HTTP token 或存储凭据。
 	for _, item := range os.Environ() {
 		if !strings.HasPrefix(strings.ToUpper(strings.SplitN(item, "=", 2)[0]), "PACK_") {
 			command.Env = append(command.Env, item)
 		}
 	}
-	command.Env = append(command.Env, "PACK_KEYSTORE_PATH="+r.cfg.KeystoreAbsPath(), "PACK_KEYSTORE_ALIAS="+r.cfg.KeystoreAlias, "PACK_KEYSTORE_STORE_PASS="+r.cfg.KeystoreStorePass, "PACK_KEYSTORE_KEY_PASS="+r.cfg.KeystoreKeyPass)
-	safeLog, buildErr := lease.Run(command)
-	err = buildErr
-	for _, secret := range []string{r.cfg.AuthToken, r.cfg.KeystoreStorePass, r.cfg.KeystoreKeyPass, r.cfg.Storage.SecretKey, r.cfg.Storage.AccessKey} {
+	command.Env = append(command.Env, "PACK_KEYSTORE_STORE_PASS="+signingPassword)
+	safeLog, err := lease.Run(command)
+	for _, secret := range []string{r.cfg.AuthToken, signingPassword, r.cfg.Storage.SecretKey, r.cfg.Storage.AccessKey} {
 		if secret != "" {
 			safeLog = strings.ReplaceAll(safeLog, secret, "[REDACTED]")
 		}
@@ -240,7 +276,7 @@ func (r *Runner) Run(ctx context.Context, req BuildReq) (BuildResp, error) {
 	if err != nil {
 		return BuildResp{}, fmt.Errorf("Android build failed; inspect jobs/%s/build.log in configured DataDir", id)
 	}
-	if err = VerifyAPK(job.OutputPath, job.AssetsDir); err != nil {
+	if err = r.verifyBuild(runCtx, job); err != nil {
 		os.Remove(job.OutputPath)
 		return BuildResp{}, err
 	}
@@ -255,7 +291,29 @@ func (r *Runner) Run(ctx context.Context, req BuildReq) (BuildResp, error) {
 	return result, nil
 }
 
-func VerifyAPK(apk, assets string) error {
+func (r *Runner) verifyBuild(ctx context.Context, job Job) error {
+	aapt := filepath.Join(androidSDK(), "build-tools", "33.0.2", "aapt2")
+	badging, err := exec.CommandContext(ctx, aapt, "dump", "badging", job.OutputPath).Output()
+	if err != nil {
+		return fmt.Errorf("cannot inspect APK package and launcher icon: %w", err)
+	}
+	if name := apkPackageName.FindSubmatch(badging); name == nil || string(name[1]) != job.PackageName {
+		return fmt.Errorf("APK package name differs from build job")
+	}
+	appIcons := apkAppIcon.FindAllSubmatch(badging, -1)
+	launcher := apkLauncherIcon.FindSubmatch(badging)
+	if len(appIcons) == 0 || launcher == nil {
+		return fmt.Errorf("APK is missing its app or launcher activity icon")
+	}
+	icon := filepath.Join(r.cfg.ProjectRoot, "app", "src", "main", "res", "mipmap-xxxhdpi", "ic_launcher.webp")
+	resources := map[string]string{string(launcher[1]): icon}
+	for _, match := range appIcons {
+		resources[string(match[1])] = icon
+	}
+	return verifyAPK(job.OutputPath, job.AssetsDir, resources)
+}
+
+func verifyAPK(apk, assets string, resources map[string]string) error {
 	z, err := zip.OpenReader(apk)
 	if err != nil {
 		return fmt.Errorf("output is not an APK ZIP: %w", err)
@@ -271,6 +329,11 @@ func VerifyAPK(apk, assets string) error {
 	if entries["AndroidManifest.xml"] == nil || entries["classes.dex"] == nil {
 		return fmt.Errorf("output lacks Android application entries")
 	}
+	for name, source := range resources {
+		if err := compareAPKEntry(source, entries[name]); err != nil {
+			return fmt.Errorf("APK launcher icon differs from the current template: %w", err)
+		}
+	}
 	return filepath.WalkDir(assets, func(path string, e os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -279,37 +342,40 @@ func VerifyAPK(apk, assets string) error {
 			return nil
 		}
 		rel, _ := filepath.Rel(assets, path)
-		entry := entries["assets/"+filepath.ToSlash(rel)]
-		if entry == nil {
-			return fmt.Errorf("APK is missing a bundled asset")
-		}
-		a, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer a.Close()
-		b, err := entry.Open()
-		if err != nil {
-			return err
-		}
-		defer b.Close()
-		// 资源逐字节比对，包含 ZIP CRC 检查。
-		abuf, bbuf := make([]byte, 32768), make([]byte, 32768)
-		for {
-			an, ae := io.ReadFull(a, abuf)
-			bn, be := io.ReadFull(b, bbuf)
-			if an != bn || !bytes.Equal(abuf[:an], bbuf[:bn]) {
-				return fmt.Errorf("APK asset differs from validated input")
-			}
-			if ae == io.EOF || ae == io.ErrUnexpectedEOF {
-				if be != io.EOF && be != io.ErrUnexpectedEOF {
-					return fmt.Errorf("APK asset integrity failure")
-				}
-				return nil
-			}
-			if ae != nil || be != nil {
-				return fmt.Errorf("APK asset read failure")
-			}
-		}
+		return compareAPKEntry(path, entries["assets/"+filepath.ToSlash(rel)])
 	})
+}
+
+// 资源逐字节比对，包含 ZIP CRC 检查。
+func compareAPKEntry(path string, entry *zip.File) error {
+	if entry == nil {
+		return fmt.Errorf("APK is missing a bundled asset")
+	}
+	a, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	b, err := entry.Open()
+	if err != nil {
+		return err
+	}
+	defer b.Close()
+	abuf, bbuf := make([]byte, 32768), make([]byte, 32768)
+	for {
+		an, ae := io.ReadFull(a, abuf)
+		bn, be := io.ReadFull(b, bbuf)
+		if an != bn || !bytes.Equal(abuf[:an], bbuf[:bn]) {
+			return fmt.Errorf("APK asset differs from validated input")
+		}
+		if ae == io.EOF || ae == io.ErrUnexpectedEOF {
+			if be != io.EOF && be != io.ErrUnexpectedEOF {
+				return fmt.Errorf("APK asset integrity failure")
+			}
+			return nil
+		}
+		if ae != nil || be != nil {
+			return fmt.Errorf("APK asset read failure")
+		}
+	}
 }

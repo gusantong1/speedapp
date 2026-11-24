@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import subprocess
@@ -75,26 +76,17 @@ def main():
     for name in list(env):
         if name.startswith("PACK_") and name != "PACK_AUTH_TOKEN":
             del env[name]
+    if not args.build:
+        env.pop("ANDROID_SDK_ROOT", None)
+        env.pop("ANDROID_HOME", None)
     config = {
         "Host": "127.0.0.1", "Port": port, "ProjectRoot": str(ROOT),
         "DataDir": str(out / "service-data"), "BuildTimeoutSec": 3600,
         "VersionPath": "/app/version", "DefaultAppName": "Packapp Verification",
         "Download": {"AllowedOrigins": [origin], "AllowedPrivateCIDRs": ["127.0.0.1/32"], "AllowHTTP": True},
-        "Storage": {"Enabled": False}, "AutoGenerateKeystore": False,
+        "Storage": {"Enabled": False},
     }
     result = {"checks": [], "apks": [], "fixture": "representative nested static files; not a full Cocos game", "androidDevice": "not exercised"}
-    if args.build:
-        key_dir = out / "keys"
-        key_dir.mkdir(exist_ok=True)
-        password_file = key_dir / "password"
-        if not password_file.exists():
-            password_file.write_text(secrets.token_hex(32), encoding="utf-8")
-        password = password_file.read_text(encoding="utf-8")
-        key = key_dir / "verification.jks"
-        env.update(PACK_KEYSTORE_PATH=str(key), PACK_KEYSTORE_ALIAS="packapp-check", PACK_KEYSTORE_STORE_PASS=password, PACK_KEYSTORE_KEY_PASS=password)
-        if not key.exists():
-            command = ["keytool", "-genkeypair", "-storetype", "JKS", "-keystore", str(key), "-alias", "packapp-check", "-keyalg", "RSA", "-keysize", "2048", "-validity", "3650", "-dname", "CN=Local Verification", "-storepass:env", "PACK_KEYSTORE_STORE_PASS", "-keypass:env", "PACK_KEYSTORE_KEY_PASS"]
-            subprocess.run(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, **hidden())
     cfg_path = out / "service.yaml"
     cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     logs = (out / "service.log").open("w", encoding="utf-8")
@@ -155,10 +147,10 @@ def main():
         result["readiness"] = {"http": ready_status, "body": ready_body.decode()}
         if not args.build:
             if ready_status != 503:
-                raise AssertionError("Isolated no-signing configuration unexpectedly ready")
+                raise AssertionError("Isolated configuration without SDK unexpectedly ready")
             check("URL build reports missing environment", 503, "POST", "/packaging", valid)
             check("local build reports missing environment", 503, "POST", "/packaging", dict(valid, url="", last_version_url=origin + "/content.zip"))
-            result["buildStatus"] = "blocked: build dependencies/signing unavailable in this run"
+            result["buildStatus"] = "skipped: SDK disabled for HTTP-only checks"
         elif ready_status != 200:
             result["buildStatus"] = "blocked: " + ready_body.decode()
             code = 2
@@ -204,12 +196,15 @@ def main():
                 raise AssertionError("Cancelled request unexpectedly finished an APK")
             result["checks"].append({"name": "real HTTP build cancellation and automatic cleanup", "status": "passed", "cancelledJobIds": cancelled_ids, "activeBeforeDisconnect": True, "apkProduced": False})
             print("PASS real HTTP build cancellation and automatic cleanup", flush=True)
-            for mode in ["url", "local"]:
+            sdk = Path(env.get("ANDROID_SDK_ROOT") or env["ANDROID_HOME"])
+            tools = sdk / "build-tools" / "33.0.2"
+            aapt = tools / ("aapt2.exe" if os.name == "nt" else "aapt2")
+            signer = tools / "lib" / "apksigner.jar"
+            icon = (ROOT / "app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp").read_bytes()
+            for mode, build_path in [("url", "/packaging"), ("local", V1_BUILD_PATH), ("url", V1_BUILD_PATH)]:
                 payload = dict(valid)
-                build_path = "/packaging"
                 if mode == "local":
                     payload.update(url="", last_version_url=origin + "/content.zip")
-                    build_path = V1_BUILD_PATH
                 print("BUILD", mode, "through real POST", build_path, flush=True)
                 data = check("real " + mode + " APK build", 200, "POST", build_path, payload, timeout=3700, retry_cleanup=(mode == "url"))
                 response = json.loads(data)
@@ -220,7 +215,23 @@ def main():
                     if not response["fileUrl"].startswith("/api/packager/v1/packaging/artifacts/"):
                         raise AssertionError("v1 build returned a different download path")
                 artifact = Path(config["DataDir"]) / "artifacts" / response["fileName"]
+                badging = subprocess.check_output([aapt, "dump", "badging", artifact], encoding="utf-8", **hidden())
+                package = re.search(r"^package: name='(yq\.bxgame\.com\.b\d+_[0-9a-f]{32})'", badging, re.M)
+                if not package or not package[1].endswith("_" + response["id"]):
+                    raise AssertionError("APK package name does not match its job")
+                app_icons = re.findall(r"^application-icon-\d+:'([^']+)'", badging, re.M)
+                launcher_icon = re.search(r"^launchable-activity:.* icon='([^']+)'", badging, re.M)
+                if not app_icons or not launcher_icon:
+                    raise AssertionError("APK application or launcher activity icon is missing")
+                signature = subprocess.check_output(["java", "-jar", signer, "verify", "--print-certs", artifact],
+                                                    encoding="utf-8", **hidden())
+                certificate = re.search(r"^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$", signature, re.M)
+                if not certificate:
+                    raise AssertionError("APK signature has no certificate digest")
                 with zipfile.ZipFile(artifact) as apk:
+                    for entry in set(app_icons + [launcher_icon[1]]):
+                        if apk.read(entry) != icon:
+                            raise AssertionError("APK launcher icon differs from current template")
                     packed = json.loads(apk.read("assets/pack-config.json"))
                     if packed["url"] != payload["url"] or packed["version"] != "1.0.1":
                         raise AssertionError("APK configuration mismatch")
@@ -235,8 +246,16 @@ def main():
                 downloaded = check("authenticated artifact download", 200, "GET", response["fileUrl"])
                 if hashlib.sha256(downloaded).digest() != hashlib.sha256(artifact.read_bytes()).digest():
                     raise AssertionError("Artifact HTTP bytes differ")
-                result["apks"].append({"mode": mode, "path": str(artifact), "sha256": hashlib.sha256(downloaded).hexdigest(), "signature": "verified by production apksigner invocation", "signing": "local verification key, not production signing"})
-            result["buildStatus"] = "passed: both real signed APK builds and bundled assets verified"
+                result["apks"].append({"mode": mode, "path": str(artifact), "sha256": hashlib.sha256(downloaded).hexdigest(),
+                                       "packageName": package[1], "certificateSHA256": certificate[1],
+                                       "launcherIconSHA256": hashlib.sha256(icon).hexdigest()})
+            for field in ["packageName", "certificateSHA256"]:
+                if len({apk[field] for apk in result["apks"]}) != len(result["apks"]):
+                    raise AssertionError("APK builds reused " + field)
+            if any(jobs_dir.glob("*/signing.p12")):
+                raise AssertionError("A build kept its temporary keystore")
+            result["buildStatus"] = "passed: APKs have distinct package names and signers, with launcher icons and assets verified"
+            print("PASS unique APK packages and signing certificates, launcher icons and keystore cleanup", flush=True)
     except Exception as error:
         result["error"] = str(error)
         code = 1

@@ -18,6 +18,9 @@ import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.tencent.smtt.export.external.interfaces.WebResourceRequest
 import com.tencent.smtt.sdk.QbSdk
 import com.tencent.smtt.sdk.ValueCallback
@@ -42,7 +45,8 @@ class X5WebActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setDarkStatusBar()
+        window.statusBarColor = Color.BLACK
+        enterImmersiveMode()
         try {
             contentManager = ContentManager.get(this)
             contentSession = contentManager.openSession(savedInstanceState?.getString("pack_session_id"))
@@ -100,17 +104,17 @@ class X5WebActivity : AppCompatActivity() {
             "window.PackAppConfig = JSON.parse(${JSONObject.quote(contentManager.publicConfig(contentSession))});"
     }
 
-    fun Activity.setDarkStatusBar() {
-        // 设置状态栏背景为黑色或深色
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            window.statusBarColor = Color.BLACK // 或使用你的深色主题色
-        }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) enterImmersiveMode()
+    }
 
-        // 设置状态栏文字和图标为白色
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            window.decorView.systemUiVisibility =
-                window.decorView.systemUiVisibility and
-                        View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+    private fun enterImmersiveMode() {
+        // 隐藏系统栏，同时让 adjustResize 在键盘弹出时缩小 WebView。
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -118,9 +122,12 @@ class X5WebActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getSpeedAppUid(): String = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
 
-        // Cocos 启动脚本可同步读取，避免依赖 onPageFinished 的注入时机。
         @JavascriptInterface
         fun getPackConfig(): String = manager.publicConfig(session)
+
+        // Cocos 启动时同步读取引导域名。
+        @JavascriptInterface
+        fun getdomin(): String = manager.startupDomain
     }
 
     private fun initX5WebView() {

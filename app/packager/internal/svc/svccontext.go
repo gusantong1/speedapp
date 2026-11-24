@@ -2,7 +2,6 @@ package svc
 
 import (
 	"speedapp-packager/app/packager/internal/config"
-	"speedapp-packager/app/packager/internal/keystore"
 	"speedapp-packager/app/packager/internal/module/v1/packaging"
 	"speedapp-packager/app/packager/internal/storage"
 )
@@ -14,9 +13,6 @@ type ServiceContext struct {
 }
 
 func NewServiceContext(cfg *config.Config) (*ServiceContext, error) {
-	if err := keystore.Ensure(cfg); err != nil {
-		return nil, err
-	}
 	runner, err := packaging.NewRunner(cfg)
 	if err != nil {
 		return nil, err

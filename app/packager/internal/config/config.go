@@ -12,24 +12,18 @@ import (
 )
 
 type Config struct {
-	Host                 string         `yaml:"Host"`
-	Port                 int            `yaml:"Port"`
-	ProjectRoot          string         `yaml:"ProjectRoot"`
-	DataDir              string         `yaml:"DataDir"`
-	DefaultAppName       string         `yaml:"DefaultAppName"`
-	BuildTimeoutSec      int            `yaml:"BuildTimeoutSec"`
-	MaxRequestBytes      int64          `yaml:"MaxRequestBytes"`
-	AuthToken            string         `yaml:"AuthToken"`
-	VersionURL           string         `yaml:"VersionURL"`
-	VersionPath          string         `yaml:"VersionPath"`
-	KeystorePath         string         `yaml:"KeystorePath"`
-	AutoGenerateKeystore bool           `yaml:"AutoGenerateKeystore"`
-	KeystoreAlias        string         `yaml:"KeystoreAlias"`
-	KeystoreStorePass    string         `yaml:"KeystoreStorePass"`
-	KeystoreKeyPass      string         `yaml:"KeystoreKeyPass"`
-	KeystoreDN           string         `yaml:"KeystoreDN"`
-	Download             DownloadConfig `yaml:"Download"`
-	Storage              StorageConfig  `yaml:"Storage"`
+	Host            string         `yaml:"Host"`
+	Port            int            `yaml:"Port"`
+	ProjectRoot     string         `yaml:"ProjectRoot"`
+	DataDir         string         `yaml:"DataDir"`
+	DefaultAppName  string         `yaml:"DefaultAppName"`
+	BuildTimeoutSec int            `yaml:"BuildTimeoutSec"`
+	MaxRequestBytes int64          `yaml:"MaxRequestBytes"`
+	AuthToken       string         `yaml:"AuthToken"`
+	VersionURL      string         `yaml:"VersionURL"`
+	VersionPath     string         `yaml:"VersionPath"`
+	Download        DownloadConfig `yaml:"Download"`
+	Storage         StorageConfig  `yaml:"Storage"`
 }
 
 type DownloadConfig struct {
@@ -81,9 +75,7 @@ func complete(c *Config) (*Config, error) {
 		name   string
 		target *string
 	}{
-		{"PACK_AUTH_TOKEN", &c.AuthToken}, {"PACK_KEYSTORE_PATH", &c.KeystorePath},
-		{"PACK_KEYSTORE_ALIAS", &c.KeystoreAlias}, {"PACK_KEYSTORE_STORE_PASS", &c.KeystoreStorePass},
-		{"PACK_KEYSTORE_KEY_PASS", &c.KeystoreKeyPass}, {"PACK_STORAGE_ACCESS_KEY", &c.Storage.AccessKey},
+		{"PACK_AUTH_TOKEN", &c.AuthToken}, {"PACK_STORAGE_ACCESS_KEY", &c.Storage.AccessKey},
 		{"PACK_STORAGE_SECRET_KEY", &c.Storage.SecretKey},
 	} {
 		if value, ok := os.LookupEnv(s.name); ok {
@@ -146,18 +138,6 @@ func complete(c *Config) (*Config, error) {
 	if !strings.HasPrefix(c.VersionPath, "/") || strings.HasPrefix(c.VersionPath, "//") || strings.ContainsAny(c.VersionPath, "?#\\\r\n") {
 		return nil, fmt.Errorf("VersionPath must be an absolute URL path")
 	}
-	if c.KeystorePath == "" {
-		c.KeystorePath = "secrets/release.jks"
-	}
-	if c.KeystoreAlias == "" {
-		c.KeystoreAlias = "release"
-	}
-	if c.KeystoreKeyPass == "" {
-		c.KeystoreKeyPass = c.KeystoreStorePass
-	}
-	if c.KeystoreDN == "" {
-		c.KeystoreDN = "CN=Packapp, O=Packapp, C=CN"
-	}
 	d := &c.Download
 	if d.TimeoutSec == 0 {
 		d.TimeoutSec = 120
@@ -187,14 +167,3 @@ func complete(c *Config) (*Config, error) {
 }
 
 func (c *Config) ListenAddr() string { return net.JoinHostPort(c.Host, strconv.Itoa(c.Port)) }
-func (c *Config) KeystoreAbsPath() string {
-	if filepath.IsAbs(c.KeystorePath) {
-		return c.KeystorePath
-	}
-	return filepath.Join(c.ProjectRoot, c.KeystorePath)
-}
-func (c *Config) KeystoreOK() (string, bool) {
-	p := c.KeystoreAbsPath()
-	s, err := os.Stat(p)
-	return p, err == nil && s.Mode().IsRegular()
-}

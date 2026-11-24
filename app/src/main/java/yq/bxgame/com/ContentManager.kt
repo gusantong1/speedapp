@@ -10,6 +10,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.io.SequenceInputStream
 import java.util.concurrent.Executors
 
 /** X5 与系统 WebView 共用同一套资源及更新状态。 */
@@ -32,6 +33,7 @@ class ContentManager private constructor(private val context: Context) {
     private val sessions = mutableMapOf<String, ContentSession>()
     val allowHttp: Boolean get() = options.allowHttp
     val isLocal: Boolean get() = config.getString("url").isEmpty()
+    val startupDomain: String get() = config.optString("getdomin", config.optJSONArray("dominList")?.optString(0).orEmpty())
 
     @Synchronized
     fun openSession(restoredId: String?): ContentSession = sessions[restoredId] ?: ContentSession().also { sessions[it.id] = it }
@@ -118,14 +120,50 @@ class ContentManager private constructor(private val context: Context) {
                 else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
             }
             val encoding = if (mime.startsWith("text/") || mime in listOf("application/javascript", "application/json", "image/svg+xml")) "UTF-8" else null
-            return Resource(mime, encoding, 200, "OK", input)
+            val stream = if (isLocal && path == "index.html" && startupDomain.isNotEmpty()) {
+                withStartupDomain(input)
+            } else {
+                input
+            }
+            return Resource(mime, encoding, 200, "OK", stream)
         } catch (_: Exception) {
             // 本地资源未命中必须返回 404，不能转成外网请求。
             return Resource("text/plain", "UTF-8", 404, "Not Found", ByteArrayInputStream("Resource unavailable".toByteArray()))
         }
     }
 
+    // 在入口的第一个页面脚本前暴露域名，保留原始 HTML 和资源校验数据。
+    private fun withStartupDomain(input: InputStream): InputStream {
+        try {
+            val prefix = ByteArray(8192)
+            var size = 0
+            while (size < prefix.size) {
+                val count = input.read(prefix, size, prefix.size - size)
+                if (count <= 0) break
+                size += count
+            }
+            val header = String(prefix, 0, size, Charsets.ISO_8859_1)
+            var offset = if (header.startsWith("\u00ef\u00bb\u00bf")) 3 else 0
+            while (true) {
+                val match = htmlEntryToken.matchAt(header, offset) ?: break
+                offset = match.range.last + 1
+                if (match.value.startsWith("<head", ignoreCase = true)) break
+            }
+            val initial = prefix.copyOfRange(0, offset) + startupDomainScript + prefix.copyOfRange(offset, size)
+            return SequenceInputStream(ByteArrayInputStream(initial), input)
+        } catch (e: Exception) {
+            input.close()
+            throw e
+        }
+    }
+
     companion object {
+        private val htmlEntryToken = Regex(
+            """[ \t\r\n\f]+|<!--.*?-->|<(?:!doctype|html|head)(?=[\s>])(?:[^>"']++|"[^"]*"|'[^']*')*+>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        )
+        private val startupDomainScript = "<script>window.getdomin=window.Android.getdomin();</script>".toByteArray(Charsets.UTF_8)
+
         const val HOST = "appassets.androidplatform.net"
         const val ORIGIN = "https://appassets.androidplatform.net"
         @Volatile private var instance: ContentManager? = null

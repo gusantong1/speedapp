@@ -110,10 +110,8 @@ func TestHealthcheckCommandLoadsConfig(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{
 		Host: host, Port: port, ProjectRoot: root,
-		AuthToken:    "healthcheck-test-token-at-least-16",
-		KeystorePath: filepath.Join(root, "must-not-be-generated.jks"),
-		// Calling signing setup would fail without passwords; liveness must skip it.
-		AutoGenerateKeystore: true,
+		AuthToken: "healthcheck-test-token-at-least-16",
+		DataDir:   filepath.Join(root, "must-not-be-created"),
 	}
 	file := filepath.Join(root, "custom-config.json")
 	run := func(override string, want int) {
@@ -153,7 +151,7 @@ func TestHealthcheckCommandLoadsConfig(t *testing.T) {
 	run(host, 0) // PACK_HOST must take precedence over the config file.
 	server.Close()
 	run(host, 1)
-	if _, err := os.Stat(cfg.KeystorePath); !os.IsNotExist(err) {
-		t.Fatalf("healthcheck changed signing state: %v", err)
+	if _, err := os.Stat(cfg.DataDir); !os.IsNotExist(err) {
+		t.Fatalf("healthcheck initialized build storage: %v", err)
 	}
 }

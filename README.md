@@ -15,7 +15,7 @@ dodo 调用 `POST /api/packager/v1/packaging/build`，使用 `application/json` 
 - `url` 非空：加载这个 HTTP(S) 页面，保持 URL 模式；不会混入上一次构建的 HTML。
 - `url` 为空：必须下载 `last_version_url`，全量校验并解压到本次 `assets/html/`，随 release APK 一起打包。没有 ZIP 或入口时构建失败，不退化成 URL 套壳。
 - `version` 是内置静态资源版本，1–64 位字母、数字、点、下划线、连字符；启动后与服务器版本按字符串是否相同比较。Android 原生的 versionCode/versionName 仍在 Gradle 配置中管理。
-- `dominList` 是后端接口 origin 列表，最多 16 个，允许裸域名（规范化为 HTTPS）或带协议/端口的 origin，不允许路径、凭据、查询参数。未配置固定 VersionURL 时至少提供一个。不是 APK 下载域名列表，也不会自动替换 Cocos 代码中写死的业务接口地址。
+- `dominList` 是后端接口 origin 列表，最多 16 个，允许裸域名或带协议和端口的 origin。每次打包原样保留第一条作为 Cocos 的引导域名，供 `Android.getdomin()` 同步读取。版本查询仍使用规范化后的 origin，未配置固定 `VersionURL` 时至少提供一个。
 - URL 模式的 `last_version_url` 可为空，四个键仍须保留。生产默认 HTTPS；仅明确的测试/内部配置可启用 HTTP。
 
 成功时 `code` 为 `0`，从 `data.fileUrl` 取下载地址。文件名由随机作业 ID 生成。
@@ -44,6 +44,10 @@ dodo 调用 `POST /api/packager/v1/packaging/build`，使用 `application/json` 
 已有调用方可以继续使用 `POST /packaging` 和 `GET /artifacts/<id>.apk`。旧打包入口直接返回上述 `data` 的字段，使用原有 HTTP 状态码和本地下载路径。
 
 发布正式 Android 包通过 `golang_game` 的 `POST /api/admin/v1/clien_game/build`。Admin 调用本服务构建 APK，再按自身的 `StorageCfg` 将文件发布到 `android/a_<Unix 毫秒时间戳>.apk`，把桶内路径写入 `client_game_version.android_file_url`。新文件上传并登记成功后清理 `android/` 下的旧文件。
+
+每次构建的 Android 包名采用 `yq.bxgame.com.b<Unix 毫秒时间戳>_<作业 ID>`。构建用独立的 RSA 密钥对签名，证书名称带有相同的时间戳和作业 ID。构建完成后清理临时密钥库。新 APK 会作为独立应用安装，分别使用各自的应用数据和资源缓存。
+
+桌面图标使用 `app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp`。应用、圆形图标和桌面启动入口都引用这份资源。返回产物前，服务核对实际包名、启动图标字节和本次生成的签名证书。容器部署时，替换图标后需用包含该资源的新镜像构建。
 
 ## 启动版本查询与热更新
 
@@ -84,14 +88,17 @@ engine/...
 
 不要额外包一层 `html/` 或项目名目录。所有实际依赖的静态文件均须放入 ZIP；本服务保留目录及字节内容，不分析 JavaScript 去推断遗漏的远程依赖。Cocos 的动态 bundle/远程资源下载逻辑仍由游戏代码管理，下载地址、CORS 和资源版本兼容由业务方配置。
 
-Cocos 启动脚本可同步读取（桥接方法在页面脚本执行时已可调用）：
+Cocos 启动脚本可同步读取打包配置和引导域名。
 
 ```js
 const packConfig = JSON.parse(window.Android.getPackConfig());
 // packConfig: { url, dominList, version, last_version_url }
 const backendOrigins = packConfig.dominList;
+const bootstrapDomain = window.Android.getdomin();
 // 由游戏代码按需选择 backendOrigins 发起业务请求。
 ```
+
+内置及热更新资源的 `index.html` 会在首个页面脚本前设置 `window.getdomin`。Cocos 用它访问 `/api/domin/v1/domain/enabled`，提交 `{"type_list":["1","2"]}`，并使用返回的 HTTP 与 WebSocket 地址。
 
 页面结束加载后另有 `window.PackAppConfig`，启动阶段应优先用同步桥接方法。设备 ID 的原有 `Android.getSpeedAppUid()` 保留。业务 API 需允许本地域名 origin 的 CORS；有登录凭据时按实际 Cookie/CORS 规则配置。WebView 禁用 file/content 访问，默认禁用 HTTPS 页面中的 HTTP 混合内容。
 
@@ -99,10 +106,10 @@ const backendOrigins = packConfig.dominList;
 
 ## 配置与本机启动
 
-需要 Go 1.22+、Node 20+、JDK 17、Android SDK `platforms;android-33` / `build-tools;33.0.2`。复用原有签名证书及别名，才能维持同包名签名兼容。不要把生产签名文件/密码写入代码或镜像。
+需要 Go 1.22+、Node 20+、JDK 17（含 `keytool`）、Android SDK `platforms;android-33` / `build-tools;33.0.2`。
 
 1. 将实际 ZIP CDN origin 加入 `Download.AllowedOrigins`。这是完整 origin 白名单，协议和非标准端口都必须一致，不支持通配符。
-2. 准备 `secrets/release.jks`、`secrets/pack_token`、`secrets/store_pass`、`secrets/key_pass`；token 至少 16 字节。该目录被 Git 和 Docker 构建上下文排除。
+2. 准备 `secrets/pack_token`，token 至少 16 字节。该目录被 Git 和 Docker 构建上下文排除。
 3. 设置环境变量并启动（PowerShell 示例，路径换成实际安装位置）：
 
 ```powershell
@@ -111,14 +118,10 @@ $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 $env:ANDROID_SDK_ROOT = "C:\path\to\android-sdk"
 $env:GRADLE_USER_HOME = "$PWD\.cache\gradle"
 $env:PACK_AUTH_TOKEN_FILE = "$PWD\secrets\pack_token"
-$env:PACK_KEYSTORE_PATH = "$PWD\secrets\release.jks"
-$env:PACK_KEYSTORE_ALIAS = "原证书别名"
-$env:PACK_KEYSTORE_STORE_PASS_FILE = "$PWD\secrets\store_pass"
-$env:PACK_KEYSTORE_KEY_PASS_FILE = "$PWD\secrets\key_pass"
 go run ./app/packager -f app/packager/etc/packager-etc.yaml
 ```
 
-密钥支持同名环境变量或 `*_FILE`（后者优先）；密码不通过命令行传给 keytool/Gradle。可通过 `PACK_PROJECT_ROOT`、`PACK_DATA_DIR`、`PACK_HOST` 覆盖路径与监听地址。默认本机只监听 127.0.0.1:10010；配置中的目录相对 ProjectRoot。配置未提供签名/SDK 时仍可启动，构建 readiness 返回 503，不生成伪产物。自动生成证书仅在显式启用 AutoGenerateKeystore 并提供密码时进行，默认关闭。
+服务 token 和对象存储凭据支持同名环境变量或 `*_FILE`（后者优先）。可通过 `PACK_PROJECT_ROOT`、`PACK_DATA_DIR`、`PACK_HOST` 覆盖路径与监听地址。默认本机只监听 127.0.0.1:10010，配置中的目录相对 ProjectRoot。构建工具缺失时存活检查仍可用，构建就绪检查返回 503。
 
 ```powershell
 $token = (Get-Content -Raw secrets/pack_token).TrimEnd("`r", "`n")
@@ -151,7 +154,7 @@ if ($result.data.fileUrl.StartsWith("/")) {
 
 ## Docker 部署
 
-`Dockerfile` 构建独立 Linux amd64 镜像，内置 Go 服务、Node、JDK 17 和 Android 构建工具；签名与服务 token 从运行时只读 secret 挂载，不进入镜像。示例只发布到宿主机回环地址，未做公网部署。
+`Dockerfile` 构建独立 Linux amd64 镜像，内置 Go 服务、Node、JDK 17 和 Android 构建工具。服务 token 从运行时只读 secret 挂载，签名密钥在每次构建时生成。示例将服务发布到宿主机回环地址。
 
 ```sh
 # 修改 app/packager/etc/packager-etc.yaml 的 AllowedOrigins / 版本地址，并准备上述 secrets。
@@ -162,7 +165,7 @@ docker compose ps
 docker compose logs --tail=100 packapp
 ```
 
-Compose 已固定 linux/amd64；ARM 宿主机需支持该架构仿真，或调整 Go/JDK 架构配置。Compose 持久化 `/app/data` 与 `/app/gradle-cache`，配置及证书只读挂载。容器以 uid 10001 运行，宿主机 bind 目录/证书需给予该用户相应读写/读取权限。不要把宿主目录覆盖挂载到 `/app/app`，否则会遮蔽 Android 工程。
+Compose 已固定 linux/amd64，ARM 宿主机需支持该架构仿真，或调整 Go/JDK 架构配置。Compose 持久化 `/app/data` 与 `/app/gradle-cache`，配置和服务 token 以只读方式挂载。容器以 uid 10001 运行，挂载内容需给予该用户相应权限。不要把宿主目录覆盖挂载到 `/app/app`，否则会遮蔽 Android 工程。
 
 镜像 HEALTHCHECK 检查进程存活。部署前用 token 调用 `/readyz` 确认打包环境。镜像构建会下载 Android SDK 并接受构建工具许可。生产构建环境需具备官方 Gradle/Maven/Google SDK 仓库的网络访问能力。TLS 前置代理和对外发布按实际部署环境另行配置。
 
@@ -186,7 +189,7 @@ python tools/verify_service.py --build
 - JVM 脚本运行**生产 BundleUpdater**，用真实 HTTP、版本接口和 ZIP 验证升级、同版本跳过、失败保留、损坏后恢复、DNS 检查结果直接用于连接和会话版本固定；它不是 Android 设备/WebView 测试。
 - 新增 Go 工作进程测试使用实际父/子/孙进程覆盖取消、超时、服务/工作进程崩溃、重启、并发、PID 身份变化及保护其他有效锁。
 - Robolectric 在 JVM 中运行生产 X5WebActivity，检查新会话、普通回前台和配置重建；WebView 使用 Shadow 计数，不是设备或游戏渲染验收。其 Android 测试依赖由 Gradle 缓存到项目内后离线解析。
-- 服务脚本创建临时测试签名、仅监听回环的 ZIP/版本服务，先实际断开一次正在运行的 Gradle HTTP 请求并验证自动恢复，再通过真实 Go HTTP API 构建两类 APK，验证签名、下载接口与 APK 内完整资源。fixture 是嵌套静态资源示例，不是完整 Cocos 游戏，也不会被称作实际游戏启动通过。
+- 服务脚本用回环 ZIP 和版本服务测试构建取消与自动恢复，并通过两个 HTTP 入口构建 URL 和内置资源 APK。脚本验证同一请求重复打包时的包名与签名证书唯一性，同时检查桌面图标、下载接口和内置资源。
 - 运行记录在 `.cache/verification/`；实际结果及未测边界见 [VERIFICATION.md](VERIFICATION.md)。测试 APK 使用本地测试证书及临时回环地址，不应作为生产包发布。
 
 本机新增的官方便携工具仅位于 `.cache/toolchains/`，未改变系统安装。下载来源：[Microsoft OpenJDK](https://learn.microsoft.com/en-us/java/openjdk/download)、[Android SDK](https://developer.android.com/studio/)。

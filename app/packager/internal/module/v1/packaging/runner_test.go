@@ -39,11 +39,14 @@ func TestPrepareURLAndLocalInputs(t *testing.T) {
 	r := testRunner(t, s.URL)
 	for _, mode := range []string{"url", "local"} {
 		t.Run(mode, func(t *testing.T) {
-			req := BuildReq{DominList: []string{"backend.example.com"}, Version: "1.0.1", LastVersionURL: ""}
+			req := BuildReq{DominList: []string{"backend.example.com", "https://backup.example.com"}, Version: "1.0.1", LastVersionURL: ""}
 			if mode == "url" {
 				req.URL = "https://game.example.com"
 			} else {
 				req.LastVersionURL = s.URL + "/content.zip"
+			}
+			if err := r.Validate(&req); err != nil {
+				t.Fatal(err)
 			}
 			id, _ := NewID()
 			job, rc, err := r.Prepare(context.Background(), req, id)
@@ -53,6 +56,9 @@ func TestPrepareURLAndLocalInputs(t *testing.T) {
 			if rc.VersionEndpoints[0] != "https://backend.example.com/app/version" {
 				t.Fatal("bad backend version endpoint")
 			}
+			if req.DominList[0] != "backend.example.com" || rc.DominList[0] != "https://backend.example.com" {
+				t.Fatal("normalizing endpoints must preserve the original request")
+			}
 			data, err := os.ReadFile(filepath.Join(job.AssetsDir, "pack-config.json"))
 			if err != nil {
 				t.Fatal(err)
@@ -61,7 +67,7 @@ func TestPrepareURLAndLocalInputs(t *testing.T) {
 			if err = json.Unmarshal(data, &roundtrip); err != nil {
 				t.Fatal(err)
 			}
-			if roundtrip.Version != "1.0.1" || roundtrip.URL != req.URL || roundtrip.BuildID != id {
+			if roundtrip.Version != "1.0.1" || roundtrip.URL != req.URL || roundtrip.BuildID != id || roundtrip.GetDomin != "backend.example.com" {
 				t.Fatal("request config changed")
 			}
 			_, err = os.Stat(filepath.Join(job.AssetsDir, "html", "assets", "main", "game.js"))
@@ -100,28 +106,59 @@ func TestValidateAndProjectLock(t *testing.T) {
 	}
 }
 
-// 只验证产物检查器；这些合成 ZIP 不是可安装 APK，也不用于构建验收。
-func TestVerifyAPKRejectsMissingOrChangedAssets(t *testing.T) {
+// 用合成 ZIP 验证产物检查器对缺失或陈旧资源的处理。
+func TestVerifyAPKChecksAssetsAndLauncherIcon(t *testing.T) {
 	root := t.TempDir()
 	assets := filepath.Join(root, "assets")
-	os.Mkdir(assets, 0700)
-	os.WriteFile(filepath.Join(assets, "pack-config.json"), []byte("expected"), 0600)
-	for _, data := range []string{"", "wrong"} {
-		var b bytes.Buffer
-		z := zip.NewWriter(&b)
-		for _, name := range []string{"AndroidManifest.xml", "classes.dex"} {
-			f, _ := z.Create(name)
-			f.Write([]byte("synthetic"))
-		}
-		if data != "" {
-			f, _ := z.Create("assets/pack-config.json")
-			f.Write([]byte(data))
-		}
-		z.Close()
-		p := filepath.Join(root, "synthetic.zip")
-		os.WriteFile(p, b.Bytes(), 0600)
-		if err := VerifyAPK(p, assets); err == nil {
-			t.Fatal("invalid asset content accepted")
-		}
+	if err := os.Mkdir(assets, 0700); err != nil {
+		t.Fatal(err)
+	}
+	icon := filepath.Join(root, "launcher.webp")
+	if err := os.WriteFile(icon, []byte("current icon"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(assets, "pack-config.json"), []byte("expected config"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const iconEntry = "res/launcher.webp"
+	for _, test := range []struct {
+		name, config, icon string
+		wantError          bool
+	}{
+		{"valid", "expected config", "current icon", false},
+		{"missing config", "", "current icon", true},
+		{"wrong config", "wrong config", "current icon", true},
+		{"missing icon", "expected config", "", true},
+		{"old icon", "expected config", "old icon", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var b bytes.Buffer
+			z := zip.NewWriter(&b)
+			for name, body := range map[string]string{
+				"AndroidManifest.xml": "synthetic", "classes.dex": "synthetic",
+				"assets/pack-config.json": test.config, iconEntry: test.icon,
+			} {
+				if body == "" {
+					continue
+				}
+				f, err := z.Create(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.Write([]byte(body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := z.Close(); err != nil {
+				t.Fatal(err)
+			}
+			apk := filepath.Join(t.TempDir(), "synthetic.zip")
+			if err := os.WriteFile(apk, b.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyAPK(apk, assets, map[string]string{iconEntry: icon}); (err != nil) != test.wantError {
+				t.Fatalf("verifyAPK error = %v, want error = %t", err, test.wantError)
+			}
+		})
 	}
 }
