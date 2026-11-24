@@ -43,6 +43,8 @@ dodo 调用 `POST /api/packager/v1/packaging/build`，使用 `application/json` 
 
 已有调用方可以继续使用 `POST /packaging` 和 `GET /artifacts/<id>.apk`。旧打包入口直接返回上述 `data` 的字段，使用原有 HTTP 状态码和本地下载路径。
 
+发布正式 Android 包通过 `golang_game` 的 `POST /api/admin/v1/clien_game/build`。Admin 调用本服务构建 APK，再按自身的 `StorageCfg` 将文件发布到 `android/a_<Unix 毫秒时间戳>.apk`，把桶内路径写入 `client_game_version.android_file_url`。新文件上传并登记成功后清理 `android/` 下的旧文件。
+
 ## 启动版本查询与热更新
 
 项目原先没有可用的版本接口实现（旧代码为硬编码页面请求），现在采用以下可配置约定。**业务方需要提供该接口，本项目不会假设示例域名上已有服务器。**
