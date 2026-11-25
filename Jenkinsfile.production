@@ -3,7 +3,6 @@ pipeline {
     options {
         disableConcurrentBuilds()
         timeout(time: 45, unit: 'MINUTES')
-        timestamps()
     }
     stages {
         stage('Build production packapp image') {
