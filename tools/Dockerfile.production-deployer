@@ -1,0 +1,6 @@
+ARG JENKINS_BASE=golang-game-jenkins-jenkins
+FROM $JENKINS_BASE
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*

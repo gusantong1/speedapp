@@ -15,6 +15,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import androidx.appcompat.app.AppCompatActivity
@@ -45,6 +46,8 @@ class X5WebActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 启动画面由主题全屏显示。游戏窗口用沉浸模式，让软键盘仍可调整布局。
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
         window.statusBarColor = Color.BLACK
         enterImmersiveMode()
         try {
@@ -101,7 +104,13 @@ class X5WebActivity : AppCompatActivity() {
     private fun injectedConfig(): String {
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
         return "window.deviceId = ${JSONObject.quote(deviceId)}; " +
-            "window.PackAppConfig = JSON.parse(${JSONObject.quote(contentManager.publicConfig(contentSession))});"
+            "window.PackAppConfig = JSON.parse(${JSONObject.quote(contentManager.publicConfig(contentSession))}); " +
+            "if (window.PackAppConfig.GAME_API_BASE_URL) window.GAME_API_BASE_URL = window.PackAppConfig.GAME_API_BASE_URL;"
+    }
+
+    override fun onResume() {
+        super.onResume()
+        enterImmersiveMode()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -128,6 +137,9 @@ class X5WebActivity : AppCompatActivity() {
         // Cocos 启动时同步读取引导域名。
         @JavascriptInterface
         fun getdomin(): String = manager.startupDomain
+
+        @JavascriptInterface
+        fun getGameApiBaseUrl(): String = manager.gameApiBaseUrl
     }
 
     private fun initX5WebView() {

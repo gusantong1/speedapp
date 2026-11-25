@@ -1,0 +1,44 @@
+pipeline {
+    agent any
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 45, unit: 'MINUTES')
+        timestamps()
+    }
+    stages {
+        stage('Build production packapp image') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+revision=$(git rev-parse --verify HEAD)
+revision_tag=$(cut -c1-12 <<<"$revision")
+image="golang-game-packapp:production-$revision_tag"
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+    git archive "$revision" | docker build \
+        --label "org.opencontainers.image.revision=$revision" \
+        --tag "$image" -
+fi
+'''
+            }
+        }
+        stage('Deploy and verify production packapp') {
+            steps {
+                sh '''#!/bin/bash
+set -euo pipefail
+revision=$(git rev-parse --verify HEAD)
+icon_hash=$(sha256sum app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp | cut -d ' ' -f 1)
+runtime=/home/ubuntu/.config/golang-game-runtime/packapp-production
+base=$(docker inspect --format '{{.Config.Image}}' golang-game-jenkins-jenkins-1)
+helper=golang-game-packapp-deployer:local
+docker build --build-arg "JENKINS_BASE=$base" --tag "$helper" - \
+    < tools/Dockerfile.production-deployer
+docker run --rm -i --user 0:0 --network host --pull never \
+    --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+    --mount "type=bind,src=$runtime,dst=$runtime" \
+    --entrypoint python3 "$helper" - "$revision" "$icon_hash" \
+    < tools/deploy_packapp.py
+'''
+            }
+        }
+    }
+}

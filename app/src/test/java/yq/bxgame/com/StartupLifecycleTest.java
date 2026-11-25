@@ -70,6 +70,9 @@ public class StartupLifecycleTest {
             RuntimeEnvironment.getApplication(), manager, manager.openSession(null)
         );
         assertEquals("dapi.chongyang.bid", bridge.getdomin());
+        String baseUrl = "https://dapi.chongyang.bid/api/game/v1";
+        assertEquals(baseUrl, bridge.getGameApiBaseUrl());
+        assertEquals(baseUrl, new JSONObject(bridge.getPackConfig()).getString("GAME_API_BASE_URL"));
 
         ContentManager.Resource page = manager.intercept(
             ContentManager.ORIGIN + "/html/" + BundleUpdater.BUILTIN + "/index.html"
@@ -81,6 +84,8 @@ public class StartupLifecycleTest {
             assertTrue(html.startsWith("<!doctype html>"));
             int initializer = html.indexOf("window.getdomin=window.Android.getdomin();");
             assertTrue(initializer > 0 && initializer < html.indexOf("<body>"));
+            int apiInitializer = html.indexOf("window.GAME_API_BASE_URL=window.Android.getGameApiBaseUrl();");
+            assertTrue(apiInitializer > initializer && apiInitializer < html.indexOf("<body>"));
         }
     }
 

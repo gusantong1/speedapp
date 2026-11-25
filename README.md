@@ -15,7 +15,7 @@ dodo 调用 `POST /api/packager/v1/packaging/build`，使用 `application/json` 
 - `url` 非空：加载这个 HTTP(S) 页面，保持 URL 模式；不会混入上一次构建的 HTML。
 - `url` 为空：必须下载 `last_version_url`，全量校验并解压到本次 `assets/html/`，随 release APK 一起打包。没有 ZIP 或入口时构建失败，不退化成 URL 套壳。
 - `version` 是内置静态资源版本，1–64 位字母、数字、点、下划线、连字符；启动后与服务器版本按字符串是否相同比较。Android 原生的 versionCode/versionName 仍在 Gradle 配置中管理。
-- `dominList` 是后端接口 origin 列表，最多 16 个，允许裸域名或带协议和端口的 origin。每次打包原样保留第一条作为 Cocos 的引导域名，供 `Android.getdomin()` 同步读取。版本查询仍使用规范化后的 origin，未配置固定 `VersionURL` 时至少提供一个。
+- `dominList` 是后端接口 origin 列表，最多 16 个，允许裸域名或带协议和端口的 origin。Cocos 通过 `Android.getdomin()` 同步取得原始首项，并通过 `Android.getGameApiBaseUrl()` 取得该项规范化后的 `/api/game/v1` 地址。版本查询使用规范化后的 origin，未配置固定 `VersionURL` 时至少提供一个。
 - URL 模式的 `last_version_url` 可为空，四个键仍须保留。生产默认 HTTPS；仅明确的测试/内部配置可启用 HTTP。
 
 成功时 `code` 为 `0`，从 `data.fileUrl` 取下载地址。文件名由随机作业 ID 生成。
@@ -48,6 +48,8 @@ dodo 调用 `POST /api/packager/v1/packaging/build`，使用 `application/json` 
 每次构建的 Android 包名采用 `yq.bxgame.com.b<Unix 毫秒时间戳>_<作业 ID>`。构建用独立的 RSA 密钥对签名，证书名称带有相同的时间戳和作业 ID。构建完成后清理临时密钥库。新 APK 会作为独立应用安装，分别使用各自的应用数据和资源缓存。
 
 桌面图标使用 `app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp`。应用、圆形图标和桌面启动入口都引用这份资源。返回产物前，服务核对实际包名、启动图标字节和本次生成的签名证书。容器部署时，替换图标后需用包含该资源的新镜像构建。
+
+APK 以横屏启动。游戏窗口通过沉浸模式隐藏状态栏和导航栏，输入时仍可弹出软键盘。
 
 ## 启动版本查询与热更新
 
@@ -92,13 +94,13 @@ Cocos 启动脚本可同步读取打包配置和引导域名。
 
 ```js
 const packConfig = JSON.parse(window.Android.getPackConfig());
-// packConfig: { url, dominList, version, last_version_url }
+// packConfig: { url, dominList, GAME_API_BASE_URL, version, last_version_url }
 const backendOrigins = packConfig.dominList;
 const bootstrapDomain = window.Android.getdomin();
-// 由游戏代码按需选择 backendOrigins 发起业务请求。
+const gameApiBaseUrl = window.Android.getGameApiBaseUrl();
 ```
 
-内置及热更新资源的 `index.html` 会在首个页面脚本前设置 `window.getdomin`。Cocos 用它访问 `/api/domin/v1/domain/enabled`，提交 `{"type_list":["1","2"]}`，并使用返回的 HTTP 与 WebSocket 地址。
+内置及热更新资源的 `index.html` 会在首个页面脚本前设置 `window.getdomin` 和 `window.GAME_API_BASE_URL`。例如首项为 `dapi.chongyang.bid` 时，初始 `GAME_API_BASE_URL` 为 `https://dapi.chongyang.bid/api/game/v1`。Cocos 启动时仍使用引导域名访问 `/api/domin/v1/domain/enabled`，提交 `{"type_list":["1","2"]}`，随后使用返回的 HTTP 与 WebSocket 地址。使用新的桥接参数需要重新导出 Cocos 的 Web Mobile ZIP。
 
 页面结束加载后另有 `window.PackAppConfig`，启动阶段应优先用同步桥接方法。设备 ID 的原有 `Android.getSpeedAppUid()` 保留。业务 API 需允许本地域名 origin 的 CORS；有登录凭据时按实际 Cookie/CORS 规则配置。WebView 禁用 file/content 访问，默认禁用 HTTPS 页面中的 HTTP 混合内容。
 
@@ -153,6 +155,8 @@ if ($result.data.fileUrl.StartsWith("/")) {
 默认 ZIP 最大 128 MiB、解压总量 512 MiB、单文件 64 MiB、20000 项、压缩比 200，均有配置上限。数据目录持久保存产物和构建日志，请按业务保留期在确认构建空闲后归档/清理历史 jobs；服务不擅自删除已有 APK。
 
 ## Docker 部署
+
+Jenkins 生产任务 `packapp_production_deploy` 从 `main` 读取 `Jenkinsfile.production`，按 Git 提交构建镜像，并更新 Admin 在 10010 端口使用的打包服务。任务会在空闲时切换镜像，核对图标与启动配置，并在部署后验证健康状态。验证失败时恢复前一个镜像和 Compose 配置。生成正式 APK 仍由 Admin 的打包接口触发。
 
 `Dockerfile` 构建独立 Linux amd64 镜像，内置 Go 服务、Node、JDK 17 和 Android 构建工具。服务 token 从运行时只读 secret 挂载，签名密钥在每次构建时生成。示例将服务发布到宿主机回环地址。
 

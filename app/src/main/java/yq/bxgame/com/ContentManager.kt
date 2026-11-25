@@ -33,7 +33,12 @@ class ContentManager private constructor(private val context: Context) {
     private val sessions = mutableMapOf<String, ContentSession>()
     val allowHttp: Boolean get() = options.allowHttp
     val isLocal: Boolean get() = config.getString("url").isEmpty()
-    val startupDomain: String get() = config.optString("getdomin", config.optJSONArray("dominList")?.optString(0).orEmpty())
+    private val firstBackendOrigin: String get() = config.optJSONArray("dominList")?.optString(0).orEmpty()
+    val startupDomain: String get() = config.optString("getdomin", firstBackendOrigin)
+    val gameApiBaseUrl: String get() {
+        val origin = firstBackendOrigin
+        return if (origin.isEmpty()) "" else "$origin/api/game/v1"
+    }
 
     @Synchronized
     fun openSession(restoredId: String?): ContentSession = sessions[restoredId] ?: ContentSession().also { sessions[it.id] = it }
@@ -46,6 +51,7 @@ class ContentManager private constructor(private val context: Context) {
     fun publicConfig(session: ContentSession): String = JSONObject().apply {
         put("url", config.getString("url"))
         put("dominList", config.getJSONArray("dominList"))
+        put("GAME_API_BASE_URL", gameApiBaseUrl)
         put("version", session.selected()?.version ?: config.getString("version"))
         put("last_version_url", config.getString("last_version_url"))
     }.toString()
@@ -120,8 +126,8 @@ class ContentManager private constructor(private val context: Context) {
                 else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
             }
             val encoding = if (mime.startsWith("text/") || mime in listOf("application/javascript", "application/json", "image/svg+xml")) "UTF-8" else null
-            val stream = if (isLocal && path == "index.html" && startupDomain.isNotEmpty()) {
-                withStartupDomain(input)
+            val stream = if (isLocal && path == "index.html" && gameApiBaseUrl.isNotEmpty()) {
+                withStartupBridge(input)
             } else {
                 input
             }
@@ -132,8 +138,8 @@ class ContentManager private constructor(private val context: Context) {
         }
     }
 
-    // 在入口的第一个页面脚本前暴露域名，保留原始 HTML 和资源校验数据。
-    private fun withStartupDomain(input: InputStream): InputStream {
+    // 在入口脚本运行前提供桥接配置，原始 HTML 和资源校验数据保持完整。
+    private fun withStartupBridge(input: InputStream): InputStream {
         try {
             val prefix = ByteArray(8192)
             var size = 0
@@ -149,7 +155,7 @@ class ContentManager private constructor(private val context: Context) {
                 offset = match.range.last + 1
                 if (match.value.startsWith("<head", ignoreCase = true)) break
             }
-            val initial = prefix.copyOfRange(0, offset) + startupDomainScript + prefix.copyOfRange(offset, size)
+            val initial = prefix.copyOfRange(0, offset) + startupBridgeScript + prefix.copyOfRange(offset, size)
             return SequenceInputStream(ByteArrayInputStream(initial), input)
         } catch (e: Exception) {
             input.close()
@@ -162,7 +168,8 @@ class ContentManager private constructor(private val context: Context) {
             """[ \t\r\n\f]+|<!--.*?-->|<(?:!doctype|html|head)(?=[\s>])(?:[^>"']++|"[^"]*"|'[^']*')*+>""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         )
-        private val startupDomainScript = "<script>window.getdomin=window.Android.getdomin();</script>".toByteArray(Charsets.UTF_8)
+        private val startupBridgeScript = ("<script>window.getdomin=window.Android.getdomin();" +
+            "window.GAME_API_BASE_URL=window.Android.getGameApiBaseUrl();</script>").toByteArray(Charsets.UTF_8)
 
         const val HOST = "appassets.androidplatform.net"
         const val ORIGIN = "https://appassets.androidplatform.net"
